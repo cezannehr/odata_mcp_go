@@ -25,6 +25,10 @@ const (
 
 	// DefaultMaxEntries caps memory, since each bridge holds parsed metadata.
 	DefaultMaxEntries = 64
+
+	// DefaultMaxAge bounds how long a busy tenant keeps its parsed metadata, so
+	// a schema change on the service shows up without a restart.
+	DefaultMaxAge = 2 * time.Hour
 )
 
 // ErrNoCapacity is returned when every cached bridge is still building and the
@@ -57,6 +61,7 @@ type Registry struct {
 	entries map[string]*entry
 	factory Factory
 	ttl     time.Duration
+	maxAge  time.Duration
 	max     int
 	now     func() time.Time
 }
@@ -66,6 +71,7 @@ type entry struct {
 	bridge   Bridge
 	err      error
 	lastUsed time.Time
+	built    time.Time
 	inFlight bool
 }
 
@@ -75,6 +81,12 @@ type Option func(*Registry)
 // WithTTL sets how long an unused bridge is kept.
 func WithTTL(ttl time.Duration) Option {
 	return func(r *Registry) { r.ttl = ttl }
+}
+
+// WithMaxAge sets how long a bridge is used before being rebuilt, however
+// busy it is.
+func WithMaxAge(maxAge time.Duration) Option {
+	return func(r *Registry) { r.maxAge = maxAge }
 }
 
 // WithMaxEntries caps how many bridges are cached at once.
@@ -93,6 +105,7 @@ func New(factory Factory, opts ...Option) *Registry {
 		entries: make(map[string]*entry),
 		factory: factory,
 		ttl:     DefaultTTL,
+		maxAge:  DefaultMaxAge,
 		max:     DefaultMaxEntries,
 		now:     time.Now,
 	}
@@ -115,12 +128,17 @@ func (r *Registry) For(ctx context.Context, creds Credentials) (Bridge, error) {
 
 	r.mu.Lock()
 	e, cached := r.entries[key]
+	if cached && r.agedOutLocked(e) {
+		delete(r.entries, key)
+		closeBridge(e)
+		cached = false
+	}
 	if !cached {
 		if err := r.makeRoomLocked(); err != nil {
 			r.mu.Unlock()
 			return nil, err
 		}
-		e = &entry{inFlight: true}
+		e = &entry{inFlight: true, built: r.now()}
 		r.entries[key] = e
 	}
 	e.lastUsed = r.now()
@@ -177,7 +195,7 @@ func (r *Registry) makeRoomLocked() error {
 	cutoff := r.now().Add(-r.ttl)
 
 	for key, e := range r.entries {
-		if !e.inFlight && e.lastUsed.Before(cutoff) {
+		if (!e.inFlight && e.lastUsed.Before(cutoff)) || r.agedOutLocked(e) {
 			delete(r.entries, key)
 			closeBridge(e)
 		}
@@ -207,6 +225,13 @@ func (r *Registry) makeRoomLocked() error {
 	closeBridge(oldest)
 
 	return nil
+}
+
+// agedOutLocked reports whether a finished bridge has passed the max age.
+// Idle expiry is measured from last use; this one is measured from build,
+// so steady traffic cannot keep a stale schema alive.
+func (r *Registry) agedOutLocked(e *entry) bool {
+	return !e.inFlight && r.now().Sub(e.built) > r.maxAge
 }
 
 func closeBridge(e *entry) {

@@ -522,7 +522,7 @@ Legacy HTTP/SSE endpoints:
 
 ### Multi-Tenant Mode
 
-One process can serve many OData services. The server holds no service credentials; every MCP client sends its own with each request, and the bridge builds and caches one connection per distinct credential set (30 minutes idle, 64 entries).
+One process can serve many OData services. The server holds no service credentials; every MCP client sends its own with each request, and the bridge builds and caches one connection per distinct credential set (dropped after 30 minutes idle, rebuilt after 2 hours so schema changes appear without a restart, 64 entries at most).
 
 ```bash
 ./odata-mcp --universal --multi-tenant --transport streamable-http \
