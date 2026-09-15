@@ -63,10 +63,7 @@ func (t *SSETransport) Start(ctx context.Context) error {
 		}
 	})
 
-	t.server = &http.Server{
-		Addr:    t.security.Addr,
-		Handler: SecurityMiddleware(t.security, mux),
-	}
+	t.server = newHTTPServer(t.security, mux)
 
 	// Start message processor
 	go t.processMessages(ctx)
@@ -132,6 +129,7 @@ func (t *SSETransport) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// Handle incoming messages from query parameters or POST body
 	if r.Method == http.MethodPost {
 		var msg transport.Message
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 		if err := json.NewDecoder(r.Body).Decode(&msg); err == nil {
 			t.messages <- &clientMessage{
 				clientID: client.id,
@@ -162,6 +160,7 @@ func (t *SSETransport) handleRPC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var msg transport.Message
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

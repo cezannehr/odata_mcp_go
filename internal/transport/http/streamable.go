@@ -68,10 +68,7 @@ func (t *StreamableHTTPTransport) Start(ctx context.Context) error {
 	// Legacy SSE endpoint for backward compatibility
 	mux.HandleFunc("/sse", t.handleLegacySSE)
 
-	t.server = &http.Server{
-		Addr:    t.security.Addr,
-		Handler: SecurityMiddleware(t.security, mux),
-	}
+	t.server = newHTTPServer(t.security, mux)
 
 	// Start cleanup routine for stale streams
 	go t.cleanupStreams(ctx)
@@ -100,6 +97,7 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 
 	// Parse the incoming message
 	var msg transport.Message
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
 		return
@@ -135,7 +133,7 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 
 	if acceptSSE && needsStreaming {
 		// Upgrade to SSE for streaming responses
-		t.upgradeToSSE(w, r, response, lastEventID)
+		t.upgradeToSSE(w, response, lastEventID)
 	} else {
 		// Regular JSON response
 		w.Header().Set("Content-Type", "application/json")
@@ -179,8 +177,9 @@ func (t *StreamableHTTPTransport) shouldUpgradeToStream(request, response *trans
 	return false
 }
 
-// upgradeToSSE upgrades the connection to Server-Sent Events
-func (t *StreamableHTTPTransport) upgradeToSSE(w http.ResponseWriter, r *http.Request, initialResponse *transport.Message, lastEventID string) {
+// upgradeToSSE writes the response as an SSE stream and closes it, as the spec
+// requires; holding it open parked a connection per tool call on every proxy hop.
+func (t *StreamableHTTPTransport) upgradeToSSE(w http.ResponseWriter, initialResponse *transport.Message, lastEventID string) {
 	// Ensure we can flush
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -195,7 +194,6 @@ func (t *StreamableHTTPTransport) upgradeToSSE(w http.ResponseWriter, r *http.Re
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // Disable Nginx buffering
 
 	// Create stream context
@@ -234,28 +232,6 @@ func (t *StreamableHTTPTransport) upgradeToSSE(w http.ResponseWriter, r *http.Re
 			"status":        "resumed",
 		}); err != nil {
 			log.Printf("upgradeToSSE: failed to send resume message: %v", err)
-		}
-	}
-
-	// Keep connection alive with periodic pings
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			// Send ping to keep connection alive
-			if _, err := fmt.Fprintf(w, ":ping\n\n"); err != nil {
-				return
-			}
-			flusher.Flush()
-			stream.lastSeen = time.Now()
-
-		case <-stream.done:
-			return
-
-		case <-r.Context().Done():
-			return
 		}
 	}
 }
