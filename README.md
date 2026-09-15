@@ -177,6 +177,10 @@ GOOS=windows GOARCH=amd64 go build -o odata-mcp.exe cmd/odata-mcp/main.go
 docker build -t odata-mcp .
 docker run --rm odata-mcp --version
 
+# Or pull the image a release publishes, and layer your own hints file on it
+# FROM ghcr.io/cezannehr/odata-mcp:v1.2.3
+# COPY hints.json /app/hints.json
+
 # Run the shared multi-tenant server with docker compose, published on 127.0.0.1 only
 ODATA_ALLOWED_SERVICE_URLS="https://tenant.example.com/odata/" docker compose up -d
 curl -s http://127.0.0.1:8080/health
