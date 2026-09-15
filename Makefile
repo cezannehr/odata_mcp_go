@@ -32,6 +32,8 @@ BUILD_TIME?=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Go build flags
 LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.BuildTime=$(BUILD_TIME) -w -s"
+# Static binaries: with cgo on, the Linux release links glibc and cannot run on Alpine.
+export CGO_ENABLED=0
 GCFLAGS=-gcflags="all=-trimpath=$(PWD)"
 ASMFLAGS=-asmflags="all=-trimpath=$(PWD)"
 
