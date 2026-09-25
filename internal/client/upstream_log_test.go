@@ -64,3 +64,55 @@ func TestEveryODataCallIsLoggedWithoutItsQuery(t *testing.T) {
 		t.Errorf("the $filter leaked into the log: %s", out.String())
 	}
 }
+
+// The rule has to hold when the service is down, which is when the line is
+// read: http.Client wraps the failure in a url.Error whose text carries the
+// full URL, query included.
+func TestAFailedODataCallStillLogsWithoutItsQuery(t *testing.T) {
+	var out bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&out, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	// Port 1 is never listening.
+	c := NewODataClient("http://127.0.0.1:1/odata/", false)
+
+	_, err := c.GetEntitySet(context.Background(), "People", map[string]string{"$filter": "Email eq 'someone@example.com'"})
+	if err == nil {
+		t.Fatal("GetEntitySet() error = nil, want a connection failure")
+	}
+
+	if strings.Contains(out.String(), "someone@example.com") || strings.Contains(out.String(), "filter") {
+		t.Fatalf("the $filter leaked through the failure: %s", out.String())
+	}
+
+	var line map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &line); err != nil {
+		t.Fatalf("log line is not JSON: %v\n%s", err, out.String())
+	}
+	if line["level"] != "ERROR" || line["path"] != "/odata/People" || !strings.Contains(line["error"].(string), "connection refused") {
+		t.Errorf("line = %v, want ERROR on /odata/People with the bare cause", line)
+	}
+}
+
+func TestAKeyedODataCallLogsTheSetNotTheRow(t *testing.T) {
+	var out bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&out, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"d":{"PersonCode":"CEZ59"}}`))
+	}))
+	defer srv.Close()
+
+	c := NewODataClient(srv.URL+"/odata/", false)
+	if _, err := c.GetEntity(context.Background(), "People", map[string]interface{}{"PersonCode": "CEZ59"}, nil); err != nil {
+		t.Fatalf("GetEntity() error = %v", err)
+	}
+
+	if strings.Contains(out.String(), "CEZ59") {
+		t.Errorf("the row key leaked: %s", out.String())
+	}
+}

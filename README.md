@@ -561,7 +561,7 @@ What the server enforces in this mode:
 
 #### Logging
 
-The server writes one JSON line per request to stderr (`--log-format text` for a person reading it), plus one per call it makes upstream and one per bridge built or dropped. Nothing in them is a credential or a row: the tenant is a digest of the credential set, upstream lines carry the path but never the query, tool calls are named by action and target only, and a failed tool call is logged as `tool call failed` with its code rather than the OData service's own message, which can echo a submitted value.
+The server writes one JSON line per request to stderr (`--log-format text` for a person reading it), plus one per call it makes upstream and one per bridge built or dropped. Nothing in them is a credential or a row: the tenant is a digest of the credential set, upstream lines carry the entity set but never the query string or a key predicate, even in the error text when the service is unreachable, tool calls are named by action and target only, and a failed tool call is logged as `tool call failed` with its code rather than the OData service's own message, which can echo a submitted value.
 
 | `event` | When | Fields worth alarming on |
 |---|---|---|

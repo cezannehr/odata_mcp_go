@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -171,12 +172,14 @@ func (r *Request) correlationLocked() []slog.Attr {
 // LogUpstream records one call the bridge made to an OData service or its
 // token endpoint. Only the path is logged, never the query: a $filter carries
 // whatever the caller searched for, which for an HR service is personal data.
+// The path itself is logged without any key predicate, so a get, update or
+// delete names the entity set and not the row.
 func LogUpstream(ctx context.Context, event, method string, u *url.URL, status int, err error, elapsed time.Duration) {
 	attrs := []slog.Attr{
 		slog.String("event", event),
 		slog.String("method", method),
 		slog.String("host", u.Host),
-		slog.String("path", u.Path),
+		slog.String("path", loggablePath(u.Path)),
 		slog.Int64("duration_ms", elapsed.Milliseconds()),
 	}
 	attrs = append(attrs, Correlation(From(ctx))...)
@@ -184,7 +187,7 @@ func LogUpstream(ctx context.Context, event, method string, u *url.URL, status i
 	level := slog.LevelInfo
 	if err != nil {
 		level = slog.LevelError
-		attrs = append(attrs, slog.String("error", err.Error()))
+		attrs = append(attrs, slog.String("error", loggableError(err).Error()))
 	} else {
 		if status >= 500 {
 			level = slog.LevelError
@@ -193,6 +196,31 @@ func LogUpstream(ctx context.Context, event, method string, u *url.URL, status i
 	}
 
 	slog.Default().LogAttrs(ctx, level, "upstream", attrs...)
+}
+
+// loggableError strips the URL that http.Client wraps around a transport
+// failure. Its text is `Get "<full url>": <cause>`, query string included,
+// which would put a $filter on the line precisely when the service is down
+// and the line is being read.
+func loggableError(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return urlErr.Err
+	}
+
+	return err
+}
+
+// loggablePath drops the key predicate from the last segment, so
+// /odata/People('CEZ59') logs as /odata/People. The entity set is what
+// latency and error rate are read by; the key is a row.
+func loggablePath(p string) string {
+	last := strings.LastIndex(p, "/")
+	if open := strings.Index(p[last+1:], "("); open >= 0 {
+		return p[:last+1+open]
+	}
+
+	return p
 }
 
 func newID() string {

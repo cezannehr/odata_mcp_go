@@ -83,6 +83,11 @@ func incomingRequestID(r *http.Request) string {
 
 // clientIP is the first address in X-Forwarded-For when a proxy set it,
 // otherwise the peer. Behind a load balancer the peer is the balancer.
+//
+// For the log line only. The first entry is whatever the client sent, since
+// a load balancer appends rather than replaces, so it is trivially spoofed.
+// Anything that keys a limit on the caller's address wants the last entry,
+// or the peer, not this.
 func clientIP(r *http.Request) string {
 	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
 		first, _, _ := strings.Cut(forwarded, ",")

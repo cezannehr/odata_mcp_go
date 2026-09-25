@@ -183,3 +183,46 @@ func TestLogUpstreamLevels(t *testing.T) {
 		})
 	}
 }
+
+func TestLogUpstreamStripsTheURLFromATransportFailure(t *testing.T) {
+	var out bytes.Buffer
+	if err := initTo(&out, FormatJSON, slog.LevelInfo); err != nil {
+		t.Fatalf("initTo() error = %v", err)
+	}
+
+	u, _ := url.Parse("https://svc.example.com/odata/People?$filter=Email%20eq%20'someone@example.com'")
+	// What http.Client.Do returns when the dial fails: the whole URL is in the text.
+	err := &url.Error{Op: "Get", URL: u.String(), Err: errors.New("dial tcp 10.0.0.1:443: connect: connection refused")}
+
+	LogUpstream(context.Background(), "upstream.request", "GET", u, 0, err, time.Millisecond)
+
+	if strings.Contains(out.String(), "someone@example.com") || strings.Contains(out.String(), "$filter") {
+		t.Fatalf("query string leaked through the error text: %s", out.String())
+	}
+
+	var line map[string]any
+	if err := json.Unmarshal(out.Bytes(), &line); err != nil {
+		t.Fatalf("output is not JSON: %v", err)
+	}
+	if line["error"] != "dial tcp 10.0.0.1:443: connect: connection refused" {
+		t.Errorf("error = %v, want the bare cause", line["error"])
+	}
+}
+
+func TestLoggablePathDropsTheKeyPredicate(t *testing.T) {
+	tests := map[string]string{
+		"/odata/People":          "/odata/People",
+		"/odata/People('CEZ59')": "/odata/People",
+		"/odata/Compensation(PersonCode='CEZ59',EffectiveFrom=datetime'2020-01-01')": "/odata/Compensation",
+		"/odata/People_NewHire": "/odata/People_NewHire",
+		"/odata/$metadata":      "/odata/$metadata",
+		"/odata/":               "/odata/",
+		"":                      "",
+	}
+
+	for in, want := range tests {
+		if got := loggablePath(in); got != want {
+			t.Errorf("loggablePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
