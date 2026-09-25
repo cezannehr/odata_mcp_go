@@ -52,9 +52,14 @@ func Config(base *config.Config, creds registry.Credentials) *config.Config {
 }
 
 // Factory returns a registry.Factory that builds bridges from base.
+//
+// The build gets the first caller's context for its values only. Every
+// caller waiting on the same build shares its result, so the build must not
+// die with whichever request happened to start it; but the log lines the
+// build writes should still name that request.
 func Factory(base *config.Config) registry.Factory {
-	return func(_ context.Context, creds registry.Credentials) (registry.Bridge, error) {
-		built, err := bridge.NewODataMCPBridge(Config(base, creds))
+	return func(ctx context.Context, creds registry.Credentials) (registry.Bridge, error) {
+		built, err := bridge.NewODataMCPBridgeContext(context.WithoutCancel(ctx), Config(base, creds))
 		if err != nil {
 			return nil, err
 		}

@@ -48,6 +48,7 @@ type Config struct {
 
 	// Output and debugging
 	LogFormat string `mapstructure:"log_format"` // "text" or "json"; empty picks by mode
+	LogLevel  string `mapstructure:"log_level"`  // "debug", "info", "warn" or "error"; empty picks by mode
 	Verbose   bool   `mapstructure:"verbose"`
 	Debug     bool   `mapstructure:"debug"`
 	SortTools bool   `mapstructure:"sort_tools"`

@@ -237,3 +237,41 @@ func fmtLine(line map[string]any) string {
 	b, _ := json.Marshal(line)
 	return string(b)
 }
+
+func TestToolFailuresAreLoggedAsAMarkerNotTheirText(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		code   int
+		msg    string
+		want   string
+	}{
+		{"tool failure hides the service's text", "tools/call", -32603, "OData MCP tool 'odata' failed: OData error (HTTP 400): The value 'jane.doe@example.com' is not valid for InternalEmail", toolFailureMarker},
+		{"invalid params on a tool call is also hidden", "tools/call", -32602, "OData MCP tool 'odata' failed: OData error (HTTP 404): no person 'CEZ59'", toolFailureMarker},
+		{"credential refusal on a tool call keeps its message", "tools/call", credentialErrorCode, "registry: X-OData-Service-Url is not an allowed OData service", "registry: X-OData-Service-Url is not an allowed OData service"},
+		{"non-tool errors keep their message", "prompts/get", -32601, "Method not found", "Method not found"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parse := captureLogs(t)
+
+			handler := func(ctx context.Context, msg *transport.Message) (*transport.Message, error) {
+				return &transport.Message{JSONRPC: "2.0", ID: msg.ID, Error: &transport.Error{Code: tt.code, Message: tt.msg}}, nil
+			}
+			tr := NewStreamableHTTP(SecurityConfig{}, handler, true)
+
+			body := `{"jsonrpc":"2.0","id":1,"method":"` + tt.method + `","params":{"name":"odata","arguments":{"action":"get","target":"People"}}}`
+			req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+			RequestLogging(http.HandlerFunc(tr.handleMCP)).ServeHTTP(httptest.NewRecorder(), req)
+
+			line := parse()
+			if line["rpc_error"] != tt.want || line["rpc_error_code"] != float64(tt.code) {
+				t.Errorf("rpc_error = %v (%v), want %q (%d)", line["rpc_error"], line["rpc_error_code"], tt.want, tt.code)
+			}
+			if tt.want == toolFailureMarker && strings.Contains(fmtLine(line), "jane.doe") {
+				t.Errorf("service error text leaked: %s", fmtLine(line))
+			}
+		})
+	}
+}

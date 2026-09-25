@@ -10,19 +10,20 @@ import (
 	"errors"
 	"log/slog"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestInitRejectsUnknownFormat(t *testing.T) {
-	if err := initTo(&bytes.Buffer{}, "yaml"); err == nil {
+	if err := initTo(&bytes.Buffer{}, "yaml", slog.LevelInfo); err == nil {
 		t.Fatal("initTo(yaml) error = nil, want an error")
 	}
 }
 
 func TestInitJSONWritesOneObjectPerLine(t *testing.T) {
 	var out bytes.Buffer
-	if err := initTo(&out, FormatJSON); err != nil {
+	if err := initTo(&out, FormatJSON, slog.LevelInfo); err != nil {
 		t.Fatalf("initTo() error = %v", err)
 	}
 
@@ -34,6 +35,32 @@ func TestInitJSONWritesOneObjectPerLine(t *testing.T) {
 	}
 	if line["msg"] != "hello" || line["k"] != "v" {
 		t.Errorf("line = %v, want msg=hello k=v", line)
+	}
+}
+
+func TestInitHonoursTheLevel(t *testing.T) {
+	var out bytes.Buffer
+	if err := initTo(&out, FormatJSON, slog.LevelWarn); err != nil {
+		t.Fatalf("initTo() error = %v", err)
+	}
+
+	slog.Info("quiet")
+	slog.Warn("loud")
+
+	if got := out.String(); strings.Contains(got, "quiet") || !strings.Contains(got, "loud") {
+		t.Errorf("output = %q, want only the warning", got)
+	}
+}
+
+func TestParseLevel(t *testing.T) {
+	for name, want := range map[string]slog.Level{"debug": slog.LevelDebug, "INFO": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError} {
+		got, err := ParseLevel(name)
+		if err != nil || got != want {
+			t.Errorf("ParseLevel(%q) = %v, %v; want %v", name, got, err, want)
+		}
+	}
+	if _, err := ParseLevel("loud"); err == nil {
+		t.Error("ParseLevel(loud) error = nil, want an error")
 	}
 }
 
@@ -82,7 +109,7 @@ func TestAttrsLeadWithCorrelation(t *testing.T) {
 
 func TestLogUpstreamDropsTheQueryAndCarriesCorrelation(t *testing.T) {
 	var out bytes.Buffer
-	if err := initTo(&out, FormatJSON); err != nil {
+	if err := initTo(&out, FormatJSON, slog.LevelInfo); err != nil {
 		t.Fatalf("initTo() error = %v", err)
 	}
 
@@ -137,7 +164,7 @@ func TestLogUpstreamLevels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
-			if err := initTo(&out, FormatJSON); err != nil {
+			if err := initTo(&out, FormatJSON, slog.LevelInfo); err != nil {
 				t.Fatalf("initTo() error = %v", err)
 			}
 

@@ -561,7 +561,7 @@ What the server enforces in this mode:
 
 #### Logging
 
-The server writes one JSON line per request to stderr (`--log-format text` for a person reading it), plus one per call it makes upstream and one per bridge built or dropped. Nothing in them is a credential or a row: the tenant is a digest of the credential set, upstream lines carry the path but never the query, and tool calls are named by action and target only.
+The server writes one JSON line per request to stderr (`--log-format text` for a person reading it), plus one per call it makes upstream and one per bridge built or dropped. Nothing in them is a credential or a row: the tenant is a digest of the credential set, upstream lines carry the path but never the query, tool calls are named by action and target only, and a failed tool call is logged as `tool call failed` with its code rather than the OData service's own message, which can echo a submitted value.
 
 | `event` | When | Fields worth alarming on |
 |---|---|---|
@@ -572,7 +572,7 @@ The server writes one JSON line per request to stderr (`--log-format text` for a
 | `registry.full` | A build was refused because every slot was busy | level `WARN` |
 | `registry.stats` | Once a minute | `entries` against `max`, as a gauge |
 
-Every line for a request carries `request_id`, taken from the caller's `X-Request-Id` when it sends one and minted otherwise, and echoed back in the response header. Lines from a bridge's first build carry the `tenant` but not the request id.
+Every line for a request carries `request_id`, taken from the caller's `X-Request-Id` when it sends one and minted otherwise, and echoed back in the response header. That includes the metadata fetch when a request is the first for its credential set and triggers a build.
 - `--read-only`, `--entities`, `--functions`, `--enable` and `--disable` apply to every tenant, at call time.
 - Only `--transport streamable-http` is accepted, and `--mcp-token` is rejected, since each caller is its own gate.
 - The data a caller can reach is exactly what its credential can reach on the OData service. Scope the OAuth application there; the bridge adds no authorization of its own.
@@ -773,6 +773,7 @@ The OData MCP bridge includes a flexible hint system to provide guidance for ser
 | `--sort-tools` | Sort tools alphabetically | `true` |
 | `-v, --verbose` | Enable verbose output | `false` |
 | `--log-format` | Log line format, `text` or `json` | `json` with `--multi-tenant`, else `text` |
+| `--log-level` | Lowest level to log: `debug`, `info`, `warn`, `error` | `info` on the HTTP transports, `warn` on stdio |
 | `--debug` | Alias for --verbose | `false` |
 | `--trace` | Show tools and exit (debug mode) | `false` |
 | `--trace-mcp` | Enable MCP protocol trace logging | `false` |

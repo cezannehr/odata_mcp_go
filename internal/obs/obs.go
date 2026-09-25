@@ -32,12 +32,22 @@ const (
 //
 // Output is stderr: on the stdio transport stdout is the MCP channel, and a
 // log line there would corrupt it.
-func Init(format string) error {
-	return initTo(os.Stderr, format)
+func Init(format string, level slog.Level) error {
+	return initTo(os.Stderr, format, level)
 }
 
-func initTo(w io.Writer, format string) error {
-	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+// ParseLevel reads a level name as given on the command line.
+func ParseLevel(name string) (slog.Level, error) {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(strings.TrimSpace(name))); err != nil {
+		return 0, fmt.Errorf("unknown log level %q: use debug, info, warn or error", name)
+	}
+
+	return level, nil
+}
+
+func initTo(w io.Writer, format string, level slog.Level) error {
+	opts := &slog.HandlerOptions{Level: level}
 
 	var handler slog.Handler
 	switch strings.ToLower(strings.TrimSpace(format)) {

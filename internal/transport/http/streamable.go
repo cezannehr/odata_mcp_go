@@ -136,7 +136,7 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 	if response != nil && response.Error != nil {
 		record.Add(
 			slog.Int("rpc_error_code", response.Error.Code),
-			slog.String("rpc_error", response.Error.Message),
+			slog.String("rpc_error", loggableRPCError(msg.Method, response.Error)),
 		)
 	}
 
@@ -187,6 +187,27 @@ func describeCall(msg *transport.Message) []slog.Attr {
 	}
 
 	return attrs
+}
+
+// credentialErrorCode is what the multi-tenant runner answers when a request's
+// credential is refused or its bridge cannot be built.
+const credentialErrorCode = -32001
+
+// toolFailureMarker stands in for a tool failure's message on the request line.
+const toolFailureMarker = "tool call failed"
+
+// loggableRPCError decides how much of a JSON-RPC error goes on the request
+// line. A failed tool call carries the OData service's own error text, and a
+// validation error from an HR service can echo the value that was submitted,
+// so those are reduced to a marker: the code says what class it was, and the
+// upstream line for the same request id has the HTTP status. Everything else
+// is the server's own wording, or a credential refusal naming at most a URL.
+func loggableRPCError(method string, e *transport.Error) string {
+	if method == "tools/call" && e.Code != credentialErrorCode {
+		return toolFailureMarker
+	}
+
+	return e.Message
 }
 
 // shouldUpgradeToStream determines if a request should be upgraded to SSE

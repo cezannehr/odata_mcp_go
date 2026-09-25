@@ -103,6 +103,7 @@ func init() {
 	// Output and debugging options
 	rootCmd.Flags().BoolVarP(&cfg.Verbose, "verbose", "v", false, "Enable verbose output to stderr")
 	rootCmd.Flags().StringVar(&cfg.LogFormat, "log-format", "", "Log line format: 'text' or 'json' (default: json with --multi-tenant, text otherwise)")
+	rootCmd.Flags().StringVar(&cfg.LogLevel, "log-level", "", "Lowest level to log: debug, info, warn or error (default: info for the HTTP transports, warn for stdio)")
 	rootCmd.Flags().BoolVar(&cfg.Debug, "debug", false, "Alias for --verbose")
 	rootCmd.Flags().BoolVar(&cfg.SortTools, "sort-tools", true, "Sort tools alphabetically in the output")
 	rootCmd.Flags().BoolVar(&cfg.Trace, "trace", false, "Initialize MCP service and print all tools and parameters, then exit (useful for debugging)")
@@ -181,12 +182,7 @@ func runBridge(cmd *cobra.Command, args []string) error {
 		cfg.Verbose = true
 	}
 
-	// JSON when hosted, where a log shipper reads it; text when a person does.
-	logFormat := cfg.LogFormat
-	if logFormat == "" && cfg.MultiTenant {
-		logFormat = obs.FormatJSON
-	}
-	if err := obs.Init(logFormat); err != nil {
+	if err := initLogging(cmd); err != nil {
 		return err
 	}
 
@@ -716,6 +712,33 @@ func main() {
 		fmt.Fprintf(os.Stderr, "-------------------\n")
 		os.Exit(1)
 	}
+}
+
+// initLogging picks the format and level from the flags, or from the mode when
+// they are not given. JSON when hosted, where a log shipper reads it; text when
+// a person does. Info on the HTTP transports, which are servers; warn on stdio,
+// which is a desktop process whose stderr the client shows to a person, and
+// which was silent before this existed.
+func initLogging(cmd *cobra.Command) error {
+	format := cfg.LogFormat
+	if format == "" && cfg.MultiTenant {
+		format = obs.FormatJSON
+	}
+
+	transportType, _ := cmd.Flags().GetString("transport")
+	level := slog.LevelInfo
+	if transportType == "stdio" && !cfg.MultiTenant {
+		level = slog.LevelWarn
+	}
+	if cfg.LogLevel != "" {
+		parsed, err := obs.ParseLevel(cfg.LogLevel)
+		if err != nil {
+			return err
+		}
+		level = parsed
+	}
+
+	return obs.Init(format, level)
 }
 
 // shutdownGrace outlives the transport's own 5s drain.
