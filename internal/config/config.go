@@ -47,10 +47,11 @@ type Config struct {
 	AllowedFunctions []string // Parsed from Functions
 
 	// Output and debugging
-	Verbose   bool `mapstructure:"verbose"`
-	Debug     bool `mapstructure:"debug"`
-	SortTools bool `mapstructure:"sort_tools"`
-	Trace     bool `mapstructure:"trace"`
+	LogFormat string `mapstructure:"log_format"` // "text" or "json"; empty picks by mode
+	Verbose   bool   `mapstructure:"verbose"`
+	Debug     bool   `mapstructure:"debug"`
+	SortTools bool   `mapstructure:"sort_tools"`
+	Trace     bool   `mapstructure:"trace"`
 
 	// Response enhancement options
 	PaginationHints  bool `mapstructure:"pagination_hints"`  // Add pagination support with hints

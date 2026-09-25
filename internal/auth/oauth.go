@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/zmcp/odata-mcp/internal/obs"
 )
 
 // Client authentication methods for the token endpoint.
@@ -187,7 +189,13 @@ func (s *OAuthTokenSource) fetch(ctx context.Context) error {
 
 	s.logVerbose("Fetching OAuth token from %s", s.config.TokenURL)
 
+	start := time.Now()
 	resp, err := s.httpClient.Do(req)
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
+	}
+	obs.LogUpstream(ctx, "upstream.token", req.Method, req.URL, status, err, time.Since(start))
 	if err != nil {
 		return fmt.Errorf("OAuth token request failed: %w", err)
 	}

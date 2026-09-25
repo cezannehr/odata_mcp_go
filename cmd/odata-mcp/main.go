@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	nethttp "net/http"
 	"os"
 	"os/signal"
@@ -24,6 +25,7 @@ import (
 	"github.com/zmcp/odata-mcp/internal/client"
 	"github.com/zmcp/odata-mcp/internal/config"
 	"github.com/zmcp/odata-mcp/internal/debug"
+	"github.com/zmcp/odata-mcp/internal/obs"
 	"github.com/zmcp/odata-mcp/internal/registry"
 	"github.com/zmcp/odata-mcp/internal/tenant"
 	"github.com/zmcp/odata-mcp/internal/transport"
@@ -100,6 +102,7 @@ func init() {
 
 	// Output and debugging options
 	rootCmd.Flags().BoolVarP(&cfg.Verbose, "verbose", "v", false, "Enable verbose output to stderr")
+	rootCmd.Flags().StringVar(&cfg.LogFormat, "log-format", "", "Log line format: 'text' or 'json' (default: json with --multi-tenant, text otherwise)")
 	rootCmd.Flags().BoolVar(&cfg.Debug, "debug", false, "Alias for --verbose")
 	rootCmd.Flags().BoolVar(&cfg.SortTools, "sort-tools", true, "Sort tools alphabetically in the output")
 	rootCmd.Flags().BoolVar(&cfg.Trace, "trace", false, "Initialize MCP service and print all tools and parameters, then exit (useful for debugging)")
@@ -176,6 +179,15 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	// Handle --debug as alias for --verbose
 	if cfg.Debug {
 		cfg.Verbose = true
+	}
+
+	// JSON when hosted, where a log shipper reads it; text when a person does.
+	logFormat := cfg.LogFormat
+	if logFormat == "" && cfg.MultiTenant {
+		logFormat = obs.FormatJSON
+	}
+	if err := obs.Init(logFormat); err != nil {
+		return err
 	}
 
 	// Handle legacy dates flags
@@ -709,6 +721,28 @@ func main() {
 // shutdownGrace outlives the transport's own 5s drain.
 const shutdownGrace = 10 * time.Second
 
+// registryStatsInterval is how often the cached tenant count is logged. The
+// count only changes on build and eviction, which are logged as they happen;
+// this line exists so a metric filter has a steady gauge to read.
+const registryStatsInterval = time.Minute
+
+func reportRegistry(ctx context.Context, bridges *registry.Registry, every time.Duration) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			slog.Info("registry",
+				slog.String("event", "registry.stats"),
+				slog.Int("entries", bridges.Len()),
+				slog.Int("max", bridges.Max()))
+		}
+	}
+}
+
 // runMultiTenant serves several OData services from one process. Each request
 // carries its own service and credentials, so nothing is fetched at startup.
 func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Signal) error {
@@ -759,6 +793,10 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 			return credentialFailure(msg, err), nil
 		}
 
+		// Named on the request line before the build, so a request that fails
+		// in the factory is still attributable.
+		obs.From(ctx).SetTenant(creds.TenantID())
+
 		tenant, err := bridges.For(ctx, creds)
 		if err != nil {
 			return credentialFailure(msg, err), nil
@@ -779,6 +817,8 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	go reportRegistry(ctx, bridges, registryStatsInterval)
 
 	errChan := make(chan error, 1)
 	go func() { errChan <- trans.Start(ctx) }()

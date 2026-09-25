@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/zmcp/odata-mcp/internal/constants"
+	"github.com/zmcp/odata-mcp/internal/obs"
 )
 
 // buildRequest creates an HTTP request with proper headers and authentication
@@ -125,7 +127,7 @@ func (c *ODataClient) doRequestWithRetry(req *http.Request, bodyBytes []byte, is
 		req.ContentLength = int64(len(bodyBytes))
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req, "upstream.request")
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
@@ -203,7 +205,7 @@ func (c *ODataClient) fetchCSRFToken(ctx context.Context) error {
 	}
 
 	// Don't use doRequest here to avoid retry loops - fetch token requests shouldn't retry
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req, "upstream.csrf")
 	if err != nil {
 		return fmt.Errorf("CSRF token request failed: %w", err)
 	}
@@ -249,4 +251,20 @@ func (c *ODataClient) fetchCSRFToken(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// do sends req and logs one line about it: what was called, what came back
+// and how long it took. Every call to the OData service goes through here, so
+// this line is where upstream latency and error rate can be read from.
+func (c *ODataClient) do(req *http.Request, event string) (*http.Response, error) {
+	start := time.Now()
+	resp, err := c.httpClient.Do(req)
+
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
+	}
+	obs.LogUpstream(req.Context(), event, req.Method, req.URL, status, err, time.Since(start))
+
+	return resp, err
 }

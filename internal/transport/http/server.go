@@ -17,10 +17,13 @@ const (
 
 // newHTTPServer builds the server both HTTP transports listen on. No write
 // timeout: a tool call runs as long as the OData client allows.
+//
+// Request logging wraps the security middleware rather than the other way
+// round, so a request that is refused at the gate still produces a line.
 func newHTTPServer(security SecurityConfig, mux http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              security.Addr,
-		Handler:           SecurityMiddleware(security, mux),
+		Handler:           RequestLogging(SecurityMiddleware(security, mux)),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		IdleTimeout:       idleTimeout,

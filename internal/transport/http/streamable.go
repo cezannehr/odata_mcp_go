@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/zmcp/odata-mcp/internal/client"
+	"github.com/zmcp/odata-mcp/internal/obs"
 	"github.com/zmcp/odata-mcp/internal/transport"
 )
 
@@ -61,7 +62,7 @@ func (t *StreamableHTTPTransport) Start(ctx context.Context) error {
 			"transport": "streamable-http",
 			"protocol":  "2024-11-05",
 		}); err != nil {
-			log.Printf("health check: failed to encode response: %v", err)
+			slog.Error("health check: failed to encode response", slog.String("error", err.Error()))
 		}
 	})
 
@@ -76,7 +77,7 @@ func (t *StreamableHTTPTransport) Start(ctx context.Context) error {
 	// Start server
 	go func() {
 		if err := ListenAndServe(t.server, t.security); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("HTTP server error: %v\n", err)
+			slog.Error("HTTP server error", slog.String("error", err.Error()))
 		}
 	}()
 
@@ -99,9 +100,13 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 	var msg transport.Message
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+		obs.From(r.Context()).Add(slog.String("error", err.Error()))
 		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
 		return
 	}
+
+	record := obs.From(r.Context())
+	record.Add(describeCall(&msg)...)
 
 	// Enrich context with HTTP headers for forwarding to OData service (if enabled)
 	ctx := r.Context()
@@ -128,6 +133,13 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	if response != nil && response.Error != nil {
+		record.Add(
+			slog.Int("rpc_error_code", response.Error.Code),
+			slog.String("rpc_error", response.Error.Message),
+		)
+	}
+
 	// Check if this is a method that might benefit from streaming
 	needsStreaming := t.shouldUpgradeToStream(&msg, response)
 
@@ -138,9 +150,43 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 		// Regular JSON response
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
-			fmt.Printf("Error encoding response: %v\n", err)
+			slog.Error("Error encoding response", slog.String("error", err.Error()))
 		}
 	}
+}
+
+// describeCall names what the request asked for, at the level of the tool
+// and, for the universal tool, its action and target. Those are method and
+// entity-set names, never row data: the arguments' filters and payloads are
+// left out because they carry whatever the caller searched for or wrote.
+func describeCall(msg *transport.Message) []slog.Attr {
+	attrs := []slog.Attr{slog.String("rpc_method", msg.Method)}
+	if msg.Method != "tools/call" || len(msg.Params) == 0 {
+		return attrs
+	}
+
+	var params struct {
+		Name      string `json:"name"`
+		Arguments struct {
+			Action string `json:"action"`
+			Target string `json:"target"`
+		} `json:"arguments"`
+	}
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return attrs
+	}
+
+	if params.Name != "" {
+		attrs = append(attrs, slog.String("tool", params.Name))
+	}
+	if params.Arguments.Action != "" {
+		attrs = append(attrs, slog.String("action", params.Arguments.Action))
+	}
+	if params.Arguments.Target != "" {
+		attrs = append(attrs, slog.String("target", params.Arguments.Target))
+	}
+
+	return attrs
 }
 
 // shouldUpgradeToStream determines if a request should be upgraded to SSE
@@ -186,7 +232,7 @@ func (t *StreamableHTTPTransport) upgradeToSSE(w http.ResponseWriter, initialRes
 		// Fall back to regular response
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(initialResponse); err != nil {
-			log.Printf("upgradeToSSE: failed to encode fallback response: %v", err)
+			slog.Error("upgradeToSSE: failed to encode fallback response", slog.String("error", err.Error()))
 		}
 		return
 	}
@@ -220,7 +266,7 @@ func (t *StreamableHTTPTransport) upgradeToSSE(w http.ResponseWriter, initialRes
 	// Send initial response as first event
 	if initialResponse != nil {
 		if err := t.sendSSEMessage(stream, "message", initialResponse); err != nil {
-			log.Printf("upgradeToSSE: failed to send initial response: %v", err)
+			slog.Error("upgradeToSSE: failed to send initial response", slog.String("error", err.Error()))
 		}
 	}
 
@@ -231,7 +277,7 @@ func (t *StreamableHTTPTransport) upgradeToSSE(w http.ResponseWriter, initialRes
 			"last_event_id": lastEventID,
 			"status":        "resumed",
 		}); err != nil {
-			log.Printf("upgradeToSSE: failed to send resume message: %v", err)
+			slog.Error("upgradeToSSE: failed to send resume message", slog.String("error", err.Error()))
 		}
 	}
 }
@@ -302,7 +348,7 @@ func (t *StreamableHTTPTransport) BroadcastMessage(msg *transport.Message) error
 	for _, stream := range t.activeStreams {
 		go func(s *streamContext) {
 			if err := t.sendSSEMessage(s, "broadcast", msg); err != nil {
-				log.Printf("BroadcastMessage: failed to send to stream %s: %v", s.id, err)
+				slog.Error("BroadcastMessage: failed to send to stream", slog.String("stream", s.id), slog.String("error", err.Error()))
 			}
 		}(stream)
 	}

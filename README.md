@@ -558,6 +558,21 @@ What the server enforces in this mode:
 
 - A request with no credential is refused. A secret configured on the server (`OAUTH_CLIENT_SECRET`, `ODATA_BEARER_TOKEN`) is never lent to a caller that did not send one.
 - No header from the MCP client is forwarded to the OData service; the credential headers are consumed here.
+
+#### Logging
+
+The server writes one JSON line per request to stderr (`--log-format text` for a person reading it), plus one per call it makes upstream and one per bridge built or dropped. Nothing in them is a credential or a row: the tenant is a digest of the credential set, upstream lines carry the path but never the query, and tool calls are named by action and target only.
+
+| `event` | When | Fields worth alarming on |
+|---|---|---|
+| `http.request` | Every request except `/health` | `status`, `duration_ms`, `rpc_error_code` (`-32001` is a refused credential), `tool`, `action`, `target` |
+| `upstream.request`, `upstream.csrf`, `upstream.token` | Every call to the OData service or its token endpoint | `status`, `duration_ms`, `error`; level is `ERROR` for a 5xx or a failed connection |
+| `registry.build` | A bridge was built for a credential set | `duration_ms`, `error` (level `WARN`); the expensive step, a metadata fetch and parse |
+| `registry.evict` | A bridge was dropped | `reason`: `idle`, `aged`, `lru`, `build-failed`, `requested`. A steady rate of `lru` means the working set is over the cap |
+| `registry.full` | A build was refused because every slot was busy | level `WARN` |
+| `registry.stats` | Once a minute | `entries` against `max`, as a gauge |
+
+Every line for a request carries `request_id`, taken from the caller's `X-Request-Id` when it sends one and minted otherwise, and echoed back in the response header. Lines from a bridge's first build carry the `tenant` but not the request id.
 - `--read-only`, `--entities`, `--functions`, `--enable` and `--disable` apply to every tenant, at call time.
 - Only `--transport streamable-http` is accepted, and `--mcp-token` is rejected, since each caller is its own gate.
 - The data a caller can reach is exactly what its credential can reach on the OData service. Scope the OAuth application there; the bridge adds no authorization of its own.
@@ -757,6 +772,7 @@ The OData MCP bridge includes a flexible hint system to provide guidance for ser
 | `--functions` | Comma-separated function filter (supports wildcards) | |
 | `--sort-tools` | Sort tools alphabetically | `true` |
 | `-v, --verbose` | Enable verbose output | `false` |
+| `--log-format` | Log line format, `text` or `json` | `json` with `--multi-tenant`, else `text` |
 | `--debug` | Alias for --verbose | `false` |
 | `--trace` | Show tools and exit (debug mode) | `false` |
 | `--trace-mcp` | Enable MCP protocol trace logging | `false` |
