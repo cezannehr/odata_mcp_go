@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -71,7 +72,7 @@ func (t *SSETransport) Start(ctx context.Context) error {
 	// Start server
 	go func() {
 		if err := ListenAndServe(t.server, t.security); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("HTTP server error: %v\n", err)
+			slog.Error("HTTP server error", slog.String("error", err.Error()))
 		}
 	}()
 

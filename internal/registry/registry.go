@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/url"
 	"sync"
 	"time"
 
@@ -64,6 +66,7 @@ type Registry struct {
 	maxAge  time.Duration
 	max     int
 	now     func() time.Time
+	log     *slog.Logger
 }
 
 type entry struct {
@@ -73,7 +76,21 @@ type entry struct {
 	lastUsed time.Time
 	built    time.Time
 	inFlight bool
+
+	// For the log lines: which tenant this is and where it points, with no
+	// credential in either.
+	tenant string
+	host   string
 }
+
+// Why an entry left the cache, as logged.
+const (
+	evictIdle   = "idle"
+	evictAged   = "aged"
+	evictLRU    = "lru"
+	evictFailed = "build-failed"
+	evictAsked  = "requested"
+)
 
 // Option adjusts a Registry at construction.
 type Option func(*Registry)
@@ -99,6 +116,12 @@ func WithClock(now func() time.Time) Option {
 	return func(r *Registry) { r.now = now }
 }
 
+// WithLogger directs the registry's build and eviction lines somewhere other
+// than the process default.
+func WithLogger(log *slog.Logger) Option {
+	return func(r *Registry) { r.log = log }
+}
+
 // New returns a Registry that builds bridges with factory.
 func New(factory Factory, opts ...Option) *Registry {
 	r := &Registry{
@@ -112,6 +135,10 @@ func New(factory Factory, opts ...Option) *Registry {
 
 	for _, opt := range opts {
 		opt(r)
+	}
+
+	if r.log == nil {
+		r.log = slog.Default()
 	}
 
 	return r
@@ -129,27 +156,36 @@ func (r *Registry) For(ctx context.Context, creds Credentials) (Bridge, error) {
 	r.mu.Lock()
 	e, cached := r.entries[key]
 	if cached && r.agedOutLocked(e) {
-		delete(r.entries, key)
-		closeBridge(e)
+		r.dropLocked(key, e, evictAged)
 		cached = false
 	}
 	if !cached {
 		if err := r.makeRoomLocked(); err != nil {
+			r.log.Warn("registry",
+				slog.String("event", "registry.full"),
+				slog.String("tenant", creds.TenantID()),
+				slog.String("host", creds.host()),
+				slog.Int("entries", len(r.entries)),
+				slog.Int("max", r.max))
 			r.mu.Unlock()
 			return nil, err
 		}
-		e = &entry{inFlight: true, built: r.now()}
+		e = &entry{inFlight: true, built: r.now(), tenant: creds.TenantID(), host: creds.host()}
 		r.entries[key] = e
 	}
 	e.lastUsed = r.now()
 	r.mu.Unlock()
 
 	e.once.Do(func() {
+		start := r.now()
 		e.bridge, e.err = r.factory(ctx, creds)
 
 		r.mu.Lock()
 		e.inFlight = false
+		entries := len(r.entries)
 		r.mu.Unlock()
+
+		r.logBuild(e, r.now().Sub(start), entries)
 	})
 
 	if e.err != nil {
@@ -161,6 +197,46 @@ func (r *Registry) For(ctx context.Context, creds Credentials) (Bridge, error) {
 	return e.bridge, nil
 }
 
+// logBuild records that a bridge was built, or failed to be. Building is the
+// expensive step, a metadata fetch and parse against the service, so how
+// often it happens and how long it takes is the number to watch.
+func (r *Registry) logBuild(e *entry, elapsed time.Duration, entries int) {
+	attrs := []slog.Attr{
+		slog.String("event", "registry.build"),
+		slog.String("tenant", e.tenant),
+		slog.String("host", e.host),
+		slog.Int64("duration_ms", elapsed.Milliseconds()),
+		slog.Int("entries", entries),
+	}
+
+	if e.err != nil {
+		attrs = append(attrs, slog.String("error", e.err.Error()))
+		r.log.LogAttrs(context.Background(), slog.LevelWarn, "registry", attrs...)
+		return
+	}
+
+	r.log.LogAttrs(context.Background(), slog.LevelInfo, "registry", attrs...)
+}
+
+// dropLocked removes an entry and says why. The caller holds r.mu.
+func (r *Registry) dropLocked(key string, e *entry, reason string) {
+	delete(r.entries, key)
+	closeBridge(e)
+
+	if e == nil {
+		return
+	}
+
+	r.log.Info("registry",
+		slog.String("event", "registry.evict"),
+		slog.String("reason", reason),
+		slog.String("tenant", e.tenant),
+		slog.String("host", e.host),
+		slog.Int64("age_s", int64(r.now().Sub(e.built).Seconds())),
+		slog.Int64("idle_s", int64(r.now().Sub(e.lastUsed).Seconds())),
+		slog.Int("entries", len(r.entries)))
+}
+
 // Len reports how many bridges are currently cached.
 func (r *Registry) Len() int {
 	r.mu.Lock()
@@ -169,22 +245,25 @@ func (r *Registry) Len() int {
 	return len(r.entries)
 }
 
+// Max reports the cap Len is measured against.
+func (r *Registry) Max() int {
+	return r.max
+}
+
 // Evict drops the bridge for creds, closing it if it is closeable.
 func (r *Registry) Evict(creds Credentials) {
 	key := creds.Key()
 
 	r.mu.Lock()
 	e := r.entries[key]
-	delete(r.entries, key)
+	r.dropLocked(key, e, evictAsked)
 	r.mu.Unlock()
-
-	closeBridge(e)
 }
 
 func (r *Registry) forget(key string, want *entry) {
 	r.mu.Lock()
 	if r.entries[key] == want {
-		delete(r.entries, key)
+		r.dropLocked(key, want, evictFailed)
 	}
 	r.mu.Unlock()
 }
@@ -195,9 +274,11 @@ func (r *Registry) makeRoomLocked() error {
 	cutoff := r.now().Add(-r.ttl)
 
 	for key, e := range r.entries {
-		if (!e.inFlight && e.lastUsed.Before(cutoff)) || r.agedOutLocked(e) {
-			delete(r.entries, key)
-			closeBridge(e)
+		switch {
+		case r.agedOutLocked(e):
+			r.dropLocked(key, e, evictAged)
+		case !e.inFlight && e.lastUsed.Before(cutoff):
+			r.dropLocked(key, e, evictIdle)
 		}
 	}
 
@@ -221,8 +302,7 @@ func (r *Registry) makeRoomLocked() error {
 		return ErrNoCapacity
 	}
 
-	delete(r.entries, oldestKey)
-	closeBridge(oldest)
+	r.dropLocked(oldestKey, oldest, evictLRU)
 
 	return nil
 }
@@ -255,6 +335,24 @@ func (c Credentials) Key() string {
 	}
 
 	return hex.EncodeToString(digest.Sum(nil))
+}
+
+// TenantID is a short, stable, non-reversible name for these credentials, for
+// log lines. It is a prefix of the cache key, which is a digest of every
+// field including the secret, so it identifies a tenant without naming one.
+func (c Credentials) TenantID() string {
+	return c.Key()[:12]
+}
+
+// host is the service host, the one part of the credentials that is safe to
+// log as is.
+func (c Credentials) host() string {
+	u, err := url.Parse(c.ServiceURL)
+	if err != nil {
+		return ""
+	}
+
+	return u.Host
 }
 
 // Validate reports whether the credentials are usable.

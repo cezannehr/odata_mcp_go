@@ -36,6 +36,13 @@ type ODataMCPBridge struct {
 
 // NewODataMCPBridge creates a new bridge instance
 func NewODataMCPBridge(cfg *config.Config) (*ODataMCPBridge, error) {
+	return NewODataMCPBridgeContext(context.Background(), cfg)
+}
+
+// NewODataMCPBridgeContext is NewODataMCPBridge with a context for the
+// metadata fetch the build performs. It is read for its values, so the log
+// lines that fetch produces can name the request that caused the build.
+func NewODataMCPBridgeContext(ctx context.Context, cfg *config.Config) (*ODataMCPBridge, error) {
 	// Create OData client
 	odataClient := client.NewODataClient(cfg.ServiceURL, cfg.Verbose)
 
@@ -109,7 +116,7 @@ func NewODataMCPBridge(cfg *config.Config) (*ODataMCPBridge, error) {
 	}
 
 	// Initialize metadata and tools
-	if err := bridge.initialize(); err != nil {
+	if err := bridge.initialize(ctx); err != nil {
 		return nil, fmt.Errorf("failed to initialize bridge: %w", err)
 	}
 
@@ -117,9 +124,7 @@ func NewODataMCPBridge(cfg *config.Config) (*ODataMCPBridge, error) {
 }
 
 // initialize loads metadata and generates tools
-func (b *ODataMCPBridge) initialize() error {
-	ctx := context.Background()
-
+func (b *ODataMCPBridge) initialize(ctx context.Context) error {
 	// Fetch metadata
 	metadata, err := b.client.GetMetadata(ctx)
 	if err != nil {
