@@ -87,10 +87,6 @@ func shouldForwardHeader(headerName string) bool {
 		return true
 	}
 
-	if isBridgeCredentialHeader(lower) {
-		return false
-	}
-
 	// Allow custom headers (X- prefix)
 	if strings.HasPrefix(lower, "x-") {
 		return true
@@ -123,26 +119,13 @@ func shouldForwardHeader(headerName string) bool {
 	return true
 }
 
-// bridgeCredentialHeaders address the bridge, not the OData service.
-var bridgeCredentialHeaders = map[string]bool{
-	strings.ToLower(constants.HeaderODataServiceURL):   true,
-	strings.ToLower(constants.HeaderODataClientID):     true,
-	strings.ToLower(constants.HeaderODataClientSecret): true,
-	strings.ToLower(constants.HeaderODataTokenURL):     true,
-	strings.ToLower(constants.HeaderODataScope):        true,
-}
-
-func isBridgeCredentialHeader(lowercaseName string) bool {
-	return bridgeCredentialHeaders[lowercaseName]
-}
-
 // RedactHeaders copies h with every credential value masked, for logging.
 func RedactHeaders(h http.Header) http.Header {
 	safe := h.Clone()
 
 	for name := range safe {
 		lower := strings.ToLower(name)
-		if lower == "authorization" || lower == "cookie" || lower == "set-cookie" || isBridgeCredentialHeader(lower) {
+		if lower == "authorization" || lower == "cookie" || lower == "set-cookie" {
 			safe.Set(name, "[redacted]")
 		}
 	}

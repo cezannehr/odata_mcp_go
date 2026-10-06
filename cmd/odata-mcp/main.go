@@ -138,8 +138,7 @@ func init() {
 	rootCmd.Flags().Bool("allow-all-interfaces", false, "Allow binding to all interfaces (0.0.0.0/::) - requires token and TLS")
 	rootCmd.Flags().Bool("allow-plain-http", false, "Serve plain HTTP on a non-loopback address; only on a private network or behind a TLS-terminating proxy")
 	rootCmd.Flags().StringVar(&cfg.BearerToken, "bearer-token", "", "Bearer token presented to the OData service (overrides ODATA_BEARER_TOKEN env var)")
-	rootCmd.Flags().BoolVar(&cfg.MultiTenant, "multi-tenant", false, "Serve several OData services from one process, taking credentials from request headers")
-	rootCmd.Flags().StringVar(&cfg.AllowedServiceURLs, "allowed-service-urls", "", "Comma-separated service URLs a caller may select with the X-OData-Service-Url header")
+	rootCmd.Flags().BoolVar(&cfg.MultiTenant, "multi-tenant", false, "Serve many callers from one process, each sending its own credential in the Authorization header")
 
 	// Debug options
 	rootCmd.Flags().Bool("trace-mcp", false, "Enable trace logging to debug MCP communication")
@@ -789,20 +788,16 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 		return err
 	}
 
-	resolver := registry.Resolver{
-		Defaults: registry.Credentials{
-			ServiceURL:   cfg.ServiceURL,
-			BearerToken:  cfg.BearerToken,
-			ClientID:     cfg.OAuthClientID,
-			ClientSecret: cfg.OAuthClientSecret,
-			TokenURL:     cfg.OAuthTokenURL,
-			Scope:        cfg.OAuthScope,
-		},
-		AllowedServiceURLs: parseCommaSeparated(cfg.AllowedServiceURLs),
+	if cfg.ServiceURL == "" || cfg.OAuthTokenURL == "" {
+		return fmt.Errorf("--multi-tenant requires --service and --oauth-token-url, the service every caller's credential is for")
+	}
 
-		// Every caller brings its own credential, so a configured secret must
-		// never stand in for one that is missing from the request.
-		RequireRequestCredentials: true,
+	resolver := registry.Resolver{
+		Service: registry.Credentials{
+			ServiceURL: cfg.ServiceURL,
+			TokenURL:   cfg.OAuthTokenURL,
+			Scope:      cfg.OAuthScope,
+		},
 	}
 
 	sharedCfg := *cfg
@@ -833,7 +828,7 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 	}
 
 	if cfg.Verbose {
-		fmt.Fprintf(os.Stderr, "[VERBOSE] Multi-tenant mode on %s, credentials taken from request headers\n", securityCfg.Addr)
+		fmt.Fprintf(os.Stderr, "[VERBOSE] Multi-tenant mode on %s, credentials taken from the Authorization header\n", securityCfg.Addr)
 	}
 
 	trans := http.NewStreamableHTTP(securityCfg, handler, true)

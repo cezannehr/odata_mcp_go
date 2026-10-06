@@ -77,17 +77,9 @@ const (
 	ContentType   = "Content-Type"
 	Accept        = "Accept"
 	Authorization = "Authorization"
-
-	// Per-request credential headers. They address the bridge itself, so
-	// they must never be forwarded to the OData service or logged.
-	HeaderODataServiceURL   = "X-OData-Service-Url"
-	HeaderODataClientID     = "X-OData-Client-Id"
-	HeaderODataClientSecret = "X-OData-Client-Secret"
-	HeaderODataTokenURL     = "X-OData-Token-Url"
-	HeaderODataScope        = "X-OData-Scope"
-	UserAgent               = "User-Agent"
-	IfMatch                 = "If-Match"
-	IfNoneMatch             = "If-None-Match"
+	UserAgent     = "User-Agent"
+	IfMatch       = "If-Match"
+	IfNoneMatch   = "If-None-Match"
 )
 
 // Content types

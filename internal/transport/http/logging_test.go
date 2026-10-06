@@ -248,7 +248,7 @@ func TestToolFailuresAreLoggedAsAMarkerNotTheirText(t *testing.T) {
 	}{
 		{"tool failure hides the service's text", "tools/call", -32603, "OData MCP tool 'odata' failed: OData error (HTTP 400): The value 'jane.doe@example.com' is not valid for InternalEmail", toolFailureMarker},
 		{"invalid params on a tool call is also hidden", "tools/call", -32602, "OData MCP tool 'odata' failed: OData error (HTTP 404): no person 'CEZ59'", toolFailureMarker},
-		{"credential refusal on a tool call keeps its message", "tools/call", credentialErrorCode, "registry: X-OData-Service-Url is not an allowed OData service", "registry: X-OData-Service-Url is not an allowed OData service"},
+		{"credential refusal on a tool call keeps its message", "tools/call", credentialErrorCode, "registry: Basic credential is not valid base64", "registry: Basic credential is not valid base64"},
 		{"non-tool errors keep their message", "prompts/get", -32601, "Method not found", "Method not found"},
 	}
 
