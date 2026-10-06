@@ -182,11 +182,13 @@ docker run --rm odata-mcp --version
 # COPY hints.json /app/hints.json
 
 # Run the shared multi-tenant server with docker compose, published on 127.0.0.1 only
-ODATA_ALLOWED_SERVICE_URLS="https://tenant.example.com/odata/" docker compose up -d
+ODATA_SERVICE_URL="https://tenant.example.com/odata/service.svc/" \
+OAUTH_TOKEN_URL="https://tenant.example.com/oauth/token" \
+docker compose up -d
 curl -s http://127.0.0.1:8080/health
 ```
 
-`docker-compose.yml` takes four variables, from the shell or a `.env` next to it: `ODATA_ALLOWED_SERVICE_URLS` (required), `ODATA_MCP_PORT` (default `8080`), `ODATA_HINTS_FILE` (default `./hints.json`) and `ODATA_MCP_EXTRA_FLAGS` for anything else the server accepts, such as `--verbose`, `--read-only` or `--entities People,Employments`. `--verbose` writes full response bodies to the container log, so keep it to local debugging. The container holds no service credentials; see [Multi-Tenant Mode](#multi-tenant-mode) for how clients send theirs.
+`docker-compose.yml` takes these variables, from the shell or a `.env` next to it: `ODATA_SERVICE_URL` and `OAUTH_TOKEN_URL` (required), `OAUTH_SCOPE`, `ODATA_MCP_PORT` (default `8080`), `ODATA_HINTS_FILE` (default `./hints.json`) and `ODATA_MCP_EXTRA_FLAGS` for anything else the server accepts, such as `--verbose`, `--read-only` or `--entities People,Employments`. `--verbose` writes full response bodies to the container log, so keep it to local debugging. The container holds no service credentials; see [Multi-Tenant Mode](#multi-tenant-mode) for how clients send theirs.
 
 #### Building in WSL (Windows Subsystem for Linux)
 
@@ -526,38 +528,35 @@ Legacy HTTP/SSE endpoints:
 
 ### Multi-Tenant Mode
 
-One process can serve many OData services. The server holds no service credentials; every MCP client sends its own with each request, and the bridge builds and caches one connection per distinct credential set (dropped after 30 minutes idle, rebuilt after 2 hours so schema changes appear without a restart, 64 entries at most).
+One process serves many callers of one OData service. The server holds no credentials; every MCP client sends its own with each request, and the bridge builds and caches one connection per distinct credential (dropped after 30 minutes idle, rebuilt after 2 hours so schema changes appear without a restart, 64 entries at most). Where the credential is used is fixed at startup, so run one server per environment.
 
 ```bash
 ./odata-mcp --universal --multi-tenant --transport streamable-http \
-  --allowed-service-urls "https://tenant-a.example.com/odata/,https://tenant-b.example.com/odata/"
+  --service https://tenant.example.com/odata/service.svc/ \
+  --oauth-token-url https://tenant.example.com/oauth/token \
+  --oauth-scope "read write"
 ```
 
-Each request carries its credential in headers:
+Each request carries its credential in the `Authorization` header:
 
 | Header | Purpose |
 |--------|---------|
-| `X-OData-Service-Url` | The service to talk to. Must start with one of `--allowed-service-urls`, compared on scheme and host exactly; anything else is refused. |
-| `X-OData-Client-Id`, `X-OData-Client-Secret` | OAuth 2.0 client credentials. |
-| `X-OData-Token-Url` | Token endpoint. Must share scheme and host with an allowed service URL. |
-| `X-OData-Scope` | OAuth 2.0 scope. |
-| `Authorization: Bearer <token>` | Instead of client credentials: a token the client already holds. |
+| `Authorization: Basic <base64 of client_id:client_secret>` | OAuth 2.0 client credentials. The server exchanges them at `--oauth-token-url` and refreshes the token itself. |
+| `Authorization: Bearer <token>` | A token the client already holds, used as is. |
 
-Registering the server in Claude Code, for example:
+One header is all a client needs, so the same setup works in any MCP client that can send a header, including Copilot Studio's API key option. Registering the server in Claude Code, for example:
 
 ```bash
 claude mcp add --transport http my-hr http://127.0.0.1:8080/mcp \
-  -H "X-OData-Service-Url: https://tenant-a.example.com/odata/service.svc/" \
-  -H "X-OData-Client-Id: <client id>" \
-  -H "X-OData-Client-Secret: <secret>" \
-  -H "X-OData-Token-Url: https://tenant-a.example.com/oauth/token" \
-  -H "X-OData-Scope: <scope>"
+  -H "Authorization: Basic $(printf '%s' '<client id>:<secret>' | base64 | tr -d '\n')"
 ```
+
+The `tr` matters on Linux, where `base64` wraps long output and breaks the header.
 
 What the server enforces in this mode:
 
 - A request with no credential is refused. A secret configured on the server (`OAUTH_CLIENT_SECRET`, `ODATA_BEARER_TOKEN`) is never lent to a caller that did not send one.
-- No header from the MCP client is forwarded to the OData service; the credential headers are consumed here.
+- No header from the MCP client is forwarded to the OData service; the `Authorization` header is consumed here.
 
 #### Logging
 
@@ -792,8 +791,7 @@ The OData MCP bridge includes a flexible hint system to provide guidance for ser
 | `--tls-key` | Path to TLS key file | |
 | `--allow-all-interfaces` | Allow binding to 0.0.0.0/:: (requires --mcp-token and --tls) | `false` |
 | `--allow-plain-http` | Serve plain HTTP on a non-loopback address (private network or behind a TLS proxy) | `false` |
-| `--multi-tenant` | Serve several OData services from one process, credentials from request headers | `false` |
-| `--allowed-service-urls` | Comma-separated service URL prefixes a multi-tenant caller may select | |
+| `--multi-tenant` | Serve many callers of one OData service, each sending its own credential in `Authorization`; requires `--service` and `--oauth-token-url` | `false` |
 | `--legacy-dates` | Enable legacy date format conversion | `true` |
 | `--no-legacy-dates` | Disable legacy date format conversion | `false` |
 | `--convert-dates-from-sap` | Convert SAP date formats in responses | `false` |

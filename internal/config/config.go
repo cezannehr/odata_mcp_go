@@ -31,8 +31,7 @@ type Config struct {
 	BearerToken string `mapstructure:"bearer_token"`
 
 	// Multi-tenant serving
-	MultiTenant        bool   `mapstructure:"multi_tenant"`
-	AllowedServiceURLs string `mapstructure:"allowed_service_urls"`
+	MultiTenant bool `mapstructure:"multi_tenant"`
 
 	// Tool naming options
 	ToolPrefix  string `mapstructure:"tool_prefix"`
