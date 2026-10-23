@@ -139,6 +139,7 @@ func init() {
 	rootCmd.Flags().Bool("allow-plain-http", false, "Serve plain HTTP on a non-loopback address; only on a private network or behind a TLS-terminating proxy")
 	rootCmd.Flags().StringVar(&cfg.BearerToken, "bearer-token", "", "Bearer token presented to the OData service (overrides ODATA_BEARER_TOKEN env var)")
 	rootCmd.Flags().BoolVar(&cfg.MultiTenant, "multi-tenant", false, "Serve many callers from one process, each sending its own credential in the Authorization header")
+	rootCmd.Flags().String("authorization-server", "", "Issuer URL MCP clients sign in with; published as OAuth protected resource metadata (with --multi-tenant)")
 
 	// Debug options
 	rootCmd.Flags().Bool("trace-mcp", false, "Enable trace logging to debug MCP communication")
@@ -780,6 +781,7 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 
 	// The caller's own credential is the gate, so no shared --mcp-token applies.
 	securityCfg.PerRequestAuth = true
+	securityCfg.AuthServer, _ = cmd.Flags().GetString("authorization-server")
 	if securityCfg.Token != "" {
 		return fmt.Errorf("--multi-tenant and --mcp-token are mutually exclusive: each caller authenticates with its own credential")
 	}

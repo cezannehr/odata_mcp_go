@@ -69,6 +69,10 @@ func (t *StreamableHTTPTransport) Start(ctx context.Context) error {
 	// Legacy SSE endpoint for backward compatibility
 	mux.HandleFunc("/sse", t.handleLegacySSE)
 
+	if t.security.AuthServer != "" {
+		mux.Handle(ProtectedResourcePath, ProtectedResourceHandler(t.security.AuthServer))
+	}
+
 	t.server = newHTTPServer(t.security, mux)
 
 	// Start cleanup routine for stale streams
