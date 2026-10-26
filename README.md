@@ -712,7 +712,10 @@ Universal mode solves this by generating a single tool that handles all operatio
 {"action": "get", "target": "Products", "params": {"key": {"ProductID": 1}}}
 {"action": "create", "target": "Orders", "params": {"data": {"CustomerID": "C001"}}}
 {"action": "call", "target": "ReleaseOrder", "params": {"OrderID": "O001"}}
+{"action": "call", "target": "Orders_Cancel", "params": {"key": {"OrderID": 1}, "reason": "duplicate"}}
 ```
+
+The last one is a bound function: it acts on one entity, which `key` names. `{"action": "info", "target": "Orders_Cancel"}` shows the entity set it's bound to (`bound_to`) and the name of its key parameter (`key_param`).
 
 ### Debugging and Inspection
 
@@ -849,6 +852,10 @@ For each entity set, the following tools are generated (if the entity set suppor
 ### Function Import Tools
 
 Each function import is mapped to an individual tool with the function name.
+
+An OData V3 function import marked `IsBindable="true"` is bound to the entity type of its first parameter, and is called through that entity, as `EntitySet(key)/FunctionName`. Its tool takes the entity's key as a `key` parameter (or `binding_key`, if the function already has a parameter called `key`). One bound to a collection (`Collection(Type)`) is called as `EntitySet/FunctionName` and takes no key. The entity set is found from the binding type, so a function whose type belongs to more than one exposed entity set is left out; `--entities` can narrow it down to one.
+
+A V3 function import without `m:HttpMethod` is treated as an action and called with POST, unless it declares `IsSideEffecting="false"`, in which case it's a function and is called with GET.
 
 ### Service Information Tool
 

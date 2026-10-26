@@ -102,12 +102,15 @@ type EntitySet struct {
 
 // FunctionImport represents an OData function import
 type FunctionImport struct {
-	XMLName    xml.Name    `xml:"FunctionImport"`
-	Name       string      `xml:"Name,attr"`
-	ReturnType string      `xml:"ReturnType,attr"`
-	HTTPMethod string      `xml:"http://schemas.microsoft.com/ado/2007/08/dataservices/metadata HttpMethod,attr"`
-	IsBindable string      `xml:"IsBindable,attr"`
-	Parameters []Parameter `xml:"Parameter"`
+	XMLName    xml.Name `xml:"FunctionImport"`
+	Name       string   `xml:"Name,attr"`
+	ReturnType string   `xml:"ReturnType,attr"`
+	HTTPMethod string   `xml:"http://schemas.microsoft.com/ado/2007/08/dataservices/metadata HttpMethod,attr"`
+	IsBindable string   `xml:"IsBindable,attr"`
+	// IsSideEffecting defaults to true; V3 marks a function, as opposed to an
+	// action, by setting it to "false".
+	IsSideEffecting string      `xml:"IsSideEffecting,attr"`
+	Parameters      []Parameter `xml:"Parameter"`
 }
 
 // Parameter represents a function parameter
@@ -274,7 +277,11 @@ func parseFunctionImport(fi FunctionImport) *models.FunctionImport {
 
 	// A V3 function import with no m:HttpMethod is an action, which the
 	// protocol invokes with POST and which read-only modes must treat as
-	// modifying. Only declared GET operations are safe to call as reads.
+	// modifying, unless it declares no side effects: then it is a function,
+	// invoked with GET.
+	if functionImport.HTTPMethod == "" && fi.IsSideEffecting == "false" {
+		functionImport.HTTPMethod = constants.GET
+	}
 	if functionImport.HTTPMethod == "" {
 		functionImport.HTTPMethod = constants.POST
 		functionImport.IsAction = true

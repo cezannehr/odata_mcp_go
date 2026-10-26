@@ -48,21 +48,23 @@ const (
 
 var boundFunctionMetadataXML = boundFunctionMetadata(defaultContainer, ordersSet, cancelOrder)
 
-type recordedPost struct {
-	path string
-	body map[string]any
+type recordedCall struct {
+	method string
+	path   string
+	query  string
+	body   map[string]any
 }
 
-func newBoundFunctionService(t *testing.T) (*httptest.Server, func() []recordedPost) {
+func newBoundFunctionService(t *testing.T) (*httptest.Server, func() []recordedCall) {
 	t.Helper()
 	return newBoundFunctionServiceWith(t, boundFunctionMetadataXML)
 }
 
-func newBoundFunctionServiceWith(t *testing.T, metadataXML string) (*httptest.Server, func() []recordedPost) {
+func newBoundFunctionServiceWith(t *testing.T, metadataXML string) (*httptest.Server, func() []recordedCall) {
 	t.Helper()
 
 	var mu sync.Mutex
-	var posts []recordedPost
+	var posts []recordedCall
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/$metadata") {
@@ -71,12 +73,14 @@ func newBoundFunctionServiceWith(t *testing.T, metadataXML string) (*httptest.Se
 			return
 		}
 
-		if r.Method == http.MethodPost {
+		// A GET on the service root is the client fetching a CSRF token, not
+		// an operation.
+		if r.Method == http.MethodPost || strings.TrimSuffix(r.URL.Path, "/") != "/odata" {
 			raw, _ := io.ReadAll(r.Body)
 			var body map[string]any
 			_ = json.Unmarshal(raw, &body)
 			mu.Lock()
-			posts = append(posts, recordedPost{path: r.URL.EscapedPath(), body: body})
+			posts = append(posts, recordedCall{method: r.Method, path: r.URL.EscapedPath(), query: r.URL.RawQuery, body: body})
 			mu.Unlock()
 		}
 
@@ -85,10 +89,10 @@ func newBoundFunctionServiceWith(t *testing.T, metadataXML string) (*httptest.Se
 	}))
 	t.Cleanup(server.Close)
 
-	return server, func() []recordedPost {
+	return server, func() []recordedCall {
 		mu.Lock()
 		defer mu.Unlock()
-		return append([]recordedPost(nil), posts...)
+		return append([]recordedCall(nil), posts...)
 	}
 }
 
@@ -289,4 +293,29 @@ func TestBoundFunctionOnAFilteredOutEntitySetIsNotOffered(t *testing.T) {
 	require.NotNil(t, rpcErr)
 	assert.Contains(t, string(rpcErr.Data), "exactly one exposed entity set")
 	assert.Empty(t, recorded())
+}
+
+func TestBoundFunctionWithoutSideEffectsIsReadWithGet(t *testing.T) {
+	status := `<FunctionImport Name="Orders_Status" ReturnType="Edm.String" IsBindable="true" IsSideEffecting="false" m:IsAlwaysBindable="true">
+          <Parameter Name="targetEntity" Type="Test.Order"/>
+          <Parameter Name="detail" Type="Edm.String"/>
+        </FunctionImport>`
+	service, recorded := newBoundFunctionServiceWith(t, boundFunctionMetadata(defaultContainer, ordersSet, status))
+
+	readOnly := universalConfig(service.URL + "/odata/")
+	readOnly.ReadOnlyButFunctions = true
+	odataBridge, _ := universalTool(t, readOnly)
+
+	_, rpcErr := callUniversalTool(t, odataBridge, map[string]any{
+		"action": "call",
+		"target": "Orders_Status",
+		"params": map[string]any{"key": map[string]any{"OrderGUID": orderGUID}, "detail": "full"},
+	})
+	require.Nil(t, rpcErr, "a function with no side effects is a read, so read-only-but-functions allows it")
+
+	calls := recorded()
+	require.Len(t, calls, 1)
+	assert.Equal(t, http.MethodGet, calls[0].method)
+	assert.Equal(t, "/odata/Orders(guid'"+orderGUID+"')/Orders_Status", calls[0].path)
+	assert.Contains(t, calls[0].query, "detail=")
 }
