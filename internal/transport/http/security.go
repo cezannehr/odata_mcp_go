@@ -162,7 +162,7 @@ func SecurityMiddleware(cfg SecurityConfig, next http.Handler) http.Handler {
 			return
 		}
 
-		if r.URL.Path == HealthPath || (cfg.AuthServer != "" && r.URL.Path == ProtectedResourcePath) {
+		if r.URL.Path == HealthPath || (cfg.AuthServer != "" && isProtectedResourceMetadata(r.URL.Path)) {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -8,14 +8,26 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
-const ProtectedResourcePath = "/.well-known/oauth-protected-resource/mcp"
+// ProtectedResourcePrefix is where RFC 9728 puts metadata: this prefix
+// followed by the path of the resource it describes.
+const ProtectedResourcePrefix = "/.well-known/oauth-protected-resource"
+
+var protectedResourcePaths = []string{"/mcp", "/sse"}
+
+func isProtectedResourceMetadata(path string) bool {
+	return strings.HasPrefix(path, ProtectedResourcePrefix+"/")
+}
 
 // origin is taken from the request so it is right behind a TLS-terminating
 // proxy without being configured.
 func origin(r *http.Request) string {
-	scheme := r.Header.Get("X-Forwarded-Proto")
+	// Each proxy in a chain may append its own value; the first is what the
+	// client used.
+	scheme, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+	scheme = strings.TrimSpace(scheme)
 	if scheme == "" && r.TLS != nil {
 		scheme = "https"
 	}
@@ -29,14 +41,14 @@ func origin(r *http.Request) string {
 // protectedResourceChallenge is what makes an MCP client start the OAuth
 // flow; a JSON-RPC error with HTTP 200 never does.
 func protectedResourceChallenge(r *http.Request) string {
-	return fmt.Sprintf(`Bearer resource_metadata="%s%s"`, origin(r), ProtectedResourcePath)
+	return fmt.Sprintf(`Bearer resource_metadata="%s%s%s"`, origin(r), ProtectedResourcePrefix, r.URL.Path)
 }
 
 func ProtectedResourceHandler(authorizationServer string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{
-			"resource":                 origin(r) + "/mcp",
+			"resource":                 origin(r) + strings.TrimPrefix(r.URL.Path, ProtectedResourcePrefix),
 			"authorization_servers":    []string{authorizationServer},
 			"bearer_methods_supported": []string{"header"},
 		}); err != nil {

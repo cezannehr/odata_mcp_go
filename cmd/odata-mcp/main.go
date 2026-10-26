@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	nethttp "net/http"
@@ -242,6 +243,10 @@ func runBridge(cmd *cobra.Command, args []string) error {
 		if cfg.ServiceURL != "" && cfg.Verbose {
 			fmt.Fprintf(os.Stderr, "[VERBOSE] Using ODATA_URL from environment.\n")
 		}
+	}
+
+	if authServer, _ := cmd.Flags().GetString("authorization-server"); authServer != "" && !cfg.MultiTenant {
+		return fmt.Errorf("--authorization-server requires --multi-tenant, the only mode that takes each caller's own credential")
 	}
 
 	if cfg.ServiceURL == "" && !cfg.MultiTenant {
@@ -805,12 +810,13 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 	sharedCfg := *cfg
 	bridges := registry.New(tenant.Factory(&sharedCfg))
 
+	signInAvailable := securityCfg.AuthServer != ""
 	handler := func(ctx context.Context, msg *transport.Message) (*transport.Message, error) {
 		headers, _ := ctx.Value(client.HTTPHeadersContextKey).(nethttp.Header)
 
 		creds, err := resolver.Resolve(headers)
 		if err != nil {
-			return credentialFailure(msg, err), nil
+			return rejectCredential(msg, err, signInAvailable)
 		}
 
 		// Named on the request line before the build, so a request that fails
@@ -819,10 +825,18 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 
 		tenant, err := bridges.For(ctx, creds)
 		if err != nil {
+			if refusedByService(err.Error()) {
+				return rejectCredential(msg, err, signInAvailable)
+			}
 			return credentialFailure(msg, err), nil
 		}
 
-		return tenant.HandleMessage(ctx, msg)
+		response, err := tenant.HandleMessage(ctx, msg)
+		if err == nil && response != nil && response.Error != nil && refusedByService(response.Error.Message) {
+			return rejectCredential(response, errors.New(response.Error.Message), signInAvailable)
+		}
+
+		return response, err
 	}
 
 	if cfg.OAuthClientSecret != "" || cfg.BearerToken != "" {
@@ -860,6 +874,24 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 	case err := <-errChan:
 		return err
 	}
+}
+
+// Without an authorization server a 401 has nowhere to send the caller, so a
+// refusal keeps the JSON-RPC error it always had.
+func rejectCredential(failed *transport.Message, err error, signInAvailable bool) (*transport.Message, error) {
+	if signInAvailable {
+		return nil, &transport.CredentialRejectedError{Err: err}
+	}
+	if failed.Error != nil {
+		return failed, nil
+	}
+
+	return credentialFailure(failed, err), nil
+}
+
+// The OData client surfaces the upstream status only in its error text.
+func refusedByService(message string) bool {
+	return strings.Contains(message, "HTTP 401")
 }
 
 // credentialFailure reports a rejected credential as a JSON-RPC error, so the

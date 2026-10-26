@@ -22,6 +22,16 @@ type Error struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
+// CredentialRejectedError is answered with HTTP 401, the only response that
+// makes an OAuth client sign in again; a JSON-RPC error never does.
+type CredentialRejectedError struct {
+	Err error
+}
+
+func (e *CredentialRejectedError) Error() string { return e.Err.Error() }
+
+func (e *CredentialRejectedError) Unwrap() error { return e.Err }
+
 // Transport defines the interface for MCP communication transports
 type Transport interface {
 	// Start initializes the transport and begins listening for messages

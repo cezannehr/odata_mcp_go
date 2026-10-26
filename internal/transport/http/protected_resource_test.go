@@ -4,20 +4,24 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/zmcp/odata-mcp/internal/transport"
 )
 
 const issuer = "https://auth.example.com"
 
 func TestProtectedResourceMetadataIsOpenAndNamesTheIssuer(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.Handle(ProtectedResourcePath, ProtectedResourceHandler(issuer))
+	mux.Handle(ProtectedResourcePrefix+"/mcp", ProtectedResourceHandler(issuer))
 
-	req := httptest.NewRequest(http.MethodGet, "http://mcp.example.com"+ProtectedResourcePath, nil)
+	req := httptest.NewRequest(http.MethodGet, "http://mcp.example.com"+ProtectedResourcePrefix+"/mcp", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
 
 	rec := httptest.NewRecorder()
@@ -80,5 +84,68 @@ func TestSecurityMiddlewareChallengesMissingCredential(t *testing.T) {
 				t.Errorf("handler reached = %v, want %v", reached, tt.wantStatus == http.StatusOK)
 			}
 		})
+	}
+}
+
+func TestProtectedResourceMetadataDescribesEachEndpoint(t *testing.T) {
+	cfg := SecurityConfig{PerRequestAuth: true, AuthServer: issuer}
+	mux := http.NewServeMux()
+	for _, path := range protectedResourcePaths {
+		mux.Handle(ProtectedResourcePrefix+path, ProtectedResourceHandler(issuer))
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://mcp.example.com"+ProtectedResourcePrefix+"/sse", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	SecurityMiddleware(cfg, mux).ServeHTTP(rec, req)
+
+	var doc struct {
+		Resource string `json:"resource"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("metadata is not JSON: %v", err)
+	}
+	if doc.Resource != "https://mcp.example.com/sse" {
+		t.Errorf("resource = %q, want the /sse URL", doc.Resource)
+	}
+
+	sse := httptest.NewRequest(http.MethodPost, "http://mcp.example.com/sse", strings.NewReader("{}"))
+	sse.Header.Set("X-Forwarded-Proto", "https")
+	rec = httptest.NewRecorder()
+	SecurityMiddleware(cfg, mux).ServeHTTP(rec, sse)
+
+	want := `Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/sse"`
+	if got := rec.Header().Get("WWW-Authenticate"); got != want {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, want)
+	}
+}
+
+func TestOriginTakesTheClientsSchemeFromAProxyChain(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://mcp.example.com/mcp", nil)
+	req.Header.Set("X-Forwarded-Proto", "https, http")
+
+	if got := origin(req); got != "https://mcp.example.com" {
+		t.Errorf("origin = %q, want https://mcp.example.com", got)
+	}
+}
+
+func TestRejectedCredentialIsAnsweredWithAChallenge(t *testing.T) {
+	handler := func(ctx context.Context, msg *transport.Message) (*transport.Message, error) {
+		return nil, &transport.CredentialRejectedError{Err: errors.New("HTTP 401: token expired")}
+	}
+	tr := NewStreamableHTTP(SecurityConfig{PerRequestAuth: true, AuthServer: issuer}, handler, true)
+
+	req := httptest.NewRequest(http.MethodPost, "http://mcp.example.com/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("Authorization", "Bearer expired")
+	rec := httptest.NewRecorder()
+	tr.handleMCP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 so the client signs in again", rec.Code)
+	}
+	want := `Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"`
+	if got := rec.Header().Get("WWW-Authenticate"); got != want {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, want)
 	}
 }
