@@ -216,8 +216,17 @@ func (c *ODataClient) DeleteEntity(ctx context.Context, entitySet string, key ma
 
 // CallFunction calls a function import
 func (c *ODataClient) CallFunction(ctx context.Context, functionName string, parameters map[string]interface{}, method string) (*models.ODataResponse, error) {
-	endpoint := functionName
+	return c.callOperation(ctx, functionName, parameters, method)
+}
 
+// CallBoundFunction exists because servers reject a bound operation invoked
+// at the service root; it must be addressed through the entity it acts on.
+func (c *ODataClient) CallBoundFunction(ctx context.Context, entitySet string, key map[string]interface{}, functionName string, parameters map[string]interface{}, method string) (*models.ODataResponse, error) {
+	endpoint := fmt.Sprintf("%s(%s)/%s", entitySet, c.buildKeyPredicate(key), functionName)
+	return c.callOperation(ctx, endpoint, parameters, method)
+}
+
+func (c *ODataClient) callOperation(ctx context.Context, endpoint string, parameters map[string]interface{}, method string) (*models.ODataResponse, error) {
 	var req *http.Request
 	var err error
 

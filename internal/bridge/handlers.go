@@ -425,8 +425,17 @@ func (b *ODataMCPBridge) handleFunctionCall(ctx context.Context, functionName st
 		method = constants.GET
 	}
 
-	// Call OData client to execute function
-	response, err := b.client.CallFunction(ctx, functionName, parameters, method)
+	var response *models.ODataResponse
+	var err error
+	if function.IsBound {
+		entitySetName, key, keyErr := b.bindingKey(function, args)
+		if keyErr != nil {
+			return nil, keyErr
+		}
+		response, err = b.client.CallBoundFunction(ctx, entitySetName, key, functionName, parameters, method)
+	} else {
+		response, err = b.client.CallFunction(ctx, functionName, parameters, method)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to call function: %w", err)
 	}
@@ -438,4 +447,51 @@ func (b *ODataMCPBridge) handleFunctionCall(ctx context.Context, functionName st
 	}
 
 	return string(result), nil
+}
+
+func (b *ODataMCPBridge) bindingKey(function *models.FunctionImport, args map[string]any) (string, map[string]any, error) {
+	entitySetName, entityType, err := b.bindingEntitySet(function.BindingParameter.Type)
+	if err != nil {
+		return "", nil, err
+	}
+
+	keyArg, ok := args["key"].(map[string]any)
+	if !ok {
+		return "", nil, fmt.Errorf("missing required parameter: key (the %s entity to call it on)", entitySetName)
+	}
+
+	key := make(map[string]any, len(entityType.KeyProperties))
+	for _, keyProp := range entityType.KeyProperties {
+		value, exists := keyArg[keyProp]
+		if !exists {
+			return "", nil, fmt.Errorf("missing required key property: %s", keyProp)
+		}
+		key[keyProp] = wrapKeyValueForType(value, getPropertyType(entityType, keyProp))
+	}
+
+	return entitySetName, key, nil
+}
+
+// bindingEntitySet finds the entity set to address a bound function through.
+// Metadata only names the binding entity type, so a type exposed by several
+// entity sets cannot be resolved without guessing.
+func (b *ODataMCPBridge) bindingEntitySet(typeName string) (string, *models.EntityType, error) {
+	entityType := b.lookupEntityType(typeName)
+	if entityType == nil {
+		return "", nil, fmt.Errorf("binding type %s not found in metadata", typeName)
+	}
+
+	var matches []string
+	for name, entitySet := range b.metadata.EntitySets {
+		if b.shouldIncludeEntity(name) && b.lookupEntityType(entitySet.EntityType) == entityType {
+			matches = append(matches, name)
+		}
+	}
+
+	if len(matches) != 1 {
+		slices.Sort(matches)
+		return "", nil, fmt.Errorf("binding type %s must belong to exactly one exposed entity set, found %d %v", typeName, len(matches), matches)
+	}
+
+	return matches[0], entityType, nil
 }

@@ -714,7 +714,10 @@ Universal mode solves this by generating a single tool that handles all operatio
 {"action": "get", "target": "Products", "params": {"key": {"ProductID": 1}}}
 {"action": "create", "target": "Orders", "params": {"data": {"CustomerID": "C001"}}}
 {"action": "call", "target": "ReleaseOrder", "params": {"OrderID": "O001"}}
+{"action": "call", "target": "Orders_Cancel", "params": {"key": {"OrderID": 1}, "reason": "duplicate"}}
 ```
+
+The last one is an OData V3 bound function (`IsBindable="true"`): it acts on one entity, which `key` names, and is called as `Orders(1)/Orders_Cancel`. `{"action": "info", "target": "Orders_Cancel"}` shows the entity set it's bound to (`bound_to`).
 
 ### Debugging and Inspection
 
