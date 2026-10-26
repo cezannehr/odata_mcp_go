@@ -78,9 +78,6 @@ type FunctionImport struct {
 	// BindingParameter is the entity a bound operation is invoked on. It is
 	// addressed in the URL, so it is kept out of Parameters.
 	BindingParameter *FunctionParameter `json:"binding_parameter,omitempty"`
-	// Container is empty for the default entity container, so callers can
-	// qualify names only where the service has more than one container.
-	Container string `json:"container,omitempty"`
 }
 
 // FunctionParameter represents a parameter for a function/action

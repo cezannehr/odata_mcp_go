@@ -107,9 +107,6 @@ func (b *ODataMCPBridge) generateUniversalDescription() string {
 			if b.config.ReadOnly || (!b.config.AllowModifyingFunctions() && b.isFunctionModifying(fn)) {
 				continue
 			}
-			if !b.isCallableBinding(fn) {
-				continue
-			}
 			sb.WriteString(fmt.Sprintf("  %s(%s)\n", name, b.formatFunctionParams(fn)))
 		}
 	}
@@ -152,8 +149,8 @@ Examples:
 // formatFunctionParams formats function parameters for the description
 func (b *ODataMCPBridge) formatFunctionParams(fn *models.FunctionImport) string {
 	var params []string
-	if target, err := b.boundTarget(fn); err == nil && target != nil && target.keyArg != "" {
-		params = append(params, fmt.Sprintf("%s: %s key", target.keyArg, target.entitySet))
+	if entitySetName, ok := b.boundEntitySetName(fn); ok {
+		params = append(params, fmt.Sprintf("key: %s key", entitySetName))
 	}
 	for _, p := range fn.Parameters {
 		if p.Mode == "In" || p.Mode == "InOut" {
@@ -482,33 +479,22 @@ func (b *ODataMCPBridge) describeFunction(name string, function *models.Function
 		"parameters":  parameters,
 		"callable":    !b.config.ReadOnly && (b.config.AllowModifyingFunctions() || !b.isFunctionModifying(function)),
 	}
-	target, err := b.boundTarget(function)
-	if err != nil {
-		info["callable"] = false
-		info["binding_error"] = err.Error()
-		return info
-	}
-	if target != nil {
-		info["bound_to"] = target.entitySet
-		if target.keyArg != "" {
-			info["key_param"] = target.keyArg
-		}
+	if entitySetName, ok := b.boundEntitySetName(function); ok {
+		info["bound_to"] = entitySetName
 	}
 
 	return info
 }
 
-func (b *ODataMCPBridge) boundTarget(function *models.FunctionImport) (*binding, error) {
+func (b *ODataMCPBridge) boundEntitySetName(function *models.FunctionImport) (string, bool) {
 	if !function.IsBound {
-		return nil, nil
+		return "", false
 	}
-
-	return b.resolveBinding(function)
-}
-
-func (b *ODataMCPBridge) isCallableBinding(function *models.FunctionImport) bool {
-	_, err := b.boundTarget(function)
-	return err == nil
+	entitySetName, _, err := b.bindingEntitySet(function.BindingParameter.Type)
+	if err != nil {
+		return "", false
+	}
+	return entitySetName, true
 }
 
 // entitySetOperations lists what a caller may do to an entity set here, which

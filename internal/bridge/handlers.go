@@ -428,15 +428,11 @@ func (b *ODataMCPBridge) handleFunctionCall(ctx context.Context, functionName st
 	var response *models.ODataResponse
 	var err error
 	if function.IsBound {
-		target, bindErr := b.resolveBinding(function)
-		if bindErr != nil {
-			return nil, bindErr
-		}
-		key, keyErr := target.key(args)
+		entitySetName, key, keyErr := b.bindingKey(function, args)
 		if keyErr != nil {
 			return nil, keyErr
 		}
-		response, err = b.client.CallBoundFunction(ctx, target.entitySet, key, boundOperationName(functionName, function), parameters, method)
+		response, err = b.client.CallBoundFunction(ctx, entitySetName, key, functionName, parameters, method)
 	} else {
 		response, err = b.client.CallFunction(ctx, functionName, parameters, method)
 	}
@@ -453,87 +449,32 @@ func (b *ODataMCPBridge) handleFunctionCall(ctx context.Context, functionName st
 	return string(result), nil
 }
 
-const (
-	bindingKeyArg = "key"
-	// bindingKeyArgFallback carries the key when the function declares its
-	// own parameter called "key", which would otherwise be shadowed.
-	bindingKeyArgFallback = "binding_key"
-)
-
-type binding struct {
-	entitySet  string
-	entityType *models.EntityType
-	keyArg     string
-}
-
-func (b *ODataMCPBridge) resolveBinding(function *models.FunctionImport) (*binding, error) {
-	typeName, isCollection := collectionElementType(function.BindingParameter.Type)
-	entitySetName, entityType, err := b.bindingEntitySet(typeName)
+func (b *ODataMCPBridge) bindingKey(function *models.FunctionImport, args map[string]any) (string, map[string]any, error) {
+	entitySetName, entityType, err := b.bindingEntitySet(function.BindingParameter.Type)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 
-	target := &binding{entitySet: entitySetName, entityType: entityType}
-	if !isCollection {
-		target.keyArg = bindingKeyArgFor(function)
-	}
-
-	return target, nil
-}
-
-func collectionElementType(typeName string) (string, bool) {
-	if strings.HasPrefix(typeName, "Collection(") && strings.HasSuffix(typeName, ")") {
-		return typeName[len("Collection(") : len(typeName)-1], true
-	}
-
-	return typeName, false
-}
-
-func bindingKeyArgFor(function *models.FunctionImport) string {
-	for _, param := range function.Parameters {
-		if param.Name == bindingKeyArg {
-			return bindingKeyArgFallback
-		}
-	}
-
-	return bindingKeyArg
-}
-
-func (target *binding) key(args map[string]any) (map[string]any, error) {
-	if target.keyArg == "" {
-		return nil, nil
-	}
-
-	keyArg, ok := args[target.keyArg].(map[string]any)
+	keyArg, ok := args["key"].(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("missing required parameter: %s (the %s entity to call it on)", target.keyArg, target.entitySet)
+		return "", nil, fmt.Errorf("missing required parameter: key (the %s entity to call it on)", entitySetName)
 	}
 
-	key := make(map[string]any, len(target.entityType.KeyProperties))
-	for _, keyProp := range target.entityType.KeyProperties {
+	key := make(map[string]any, len(entityType.KeyProperties))
+	for _, keyProp := range entityType.KeyProperties {
 		value, exists := keyArg[keyProp]
 		if !exists {
-			return nil, fmt.Errorf("missing required key property: %s", keyProp)
+			return "", nil, fmt.Errorf("missing required key property: %s", keyProp)
 		}
-		key[keyProp] = wrapKeyValueForType(value, getPropertyType(target.entityType, keyProp))
+		key[keyProp] = wrapKeyValueForType(value, getPropertyType(entityType, keyProp))
 	}
 
-	return key, nil
-}
-
-// V3 never says when to qualify; its examples do, and WCF accepts bare names
-// in the default container, so only names outside it get the container prefix.
-func boundOperationName(functionName string, function *models.FunctionImport) string {
-	if function.Container == "" {
-		return functionName
-	}
-
-	return function.Container + "." + functionName
+	return entitySetName, key, nil
 }
 
 // bindingEntitySet finds the entity set to address a bound function through.
 // Metadata only names the binding entity type, so a type exposed by several
-// entity sets cannot be resolved without guessing; --entities can narrow it.
+// entity sets cannot be resolved without guessing.
 func (b *ODataMCPBridge) bindingEntitySet(typeName string) (string, *models.EntityType, error) {
 	entityType := b.lookupEntityType(typeName)
 	if entityType == nil {

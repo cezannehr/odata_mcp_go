@@ -220,13 +220,8 @@ func (c *ODataClient) CallFunction(ctx context.Context, functionName string, par
 }
 
 // CallBoundFunction exists because servers reject a bound operation invoked
-// at the service root; it must be addressed through the entity it acts on, or
-// through the entity set when it is bound to the collection (an empty key).
+// at the service root; it must be addressed through the entity it acts on.
 func (c *ODataClient) CallBoundFunction(ctx context.Context, entitySet string, key map[string]interface{}, functionName string, parameters map[string]interface{}, method string) (*models.ODataResponse, error) {
-	if len(key) == 0 {
-		return c.callOperation(ctx, entitySet+"/"+functionName, parameters, method)
-	}
-
 	endpoint := fmt.Sprintf("%s(%s)/%s", entitySet, c.buildKeyPredicate(key), functionName)
 	return c.callOperation(ctx, endpoint, parameters, method)
 }

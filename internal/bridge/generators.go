@@ -408,17 +408,6 @@ func (b *ODataMCPBridge) generateDeleteTool(entitySetName string, entityType *mo
 
 // generateFunctionTool creates a tool for a function import
 func (b *ODataMCPBridge) generateFunctionTool(functionName string, function *models.FunctionImport) {
-	var target *binding
-	if function.IsBound {
-		var err error
-		if target, err = b.resolveBinding(function); err != nil {
-			if b.config.Verbose {
-				fmt.Fprintf(os.Stderr, "[VERBOSE] Skipping function %s: %v\n", functionName, err)
-			}
-			return
-		}
-	}
-
 	toolName := b.formatToolName(functionName, "")
 
 	description := fmt.Sprintf("Call function: %s", functionName)
@@ -440,15 +429,17 @@ func (b *ODataMCPBridge) generateFunctionTool(functionName string, function *mod
 		}
 	}
 
-	if target != nil && target.keyArg != "" {
-		keyProperties, keyRequired := b.buildKeySchema(target.entityType)
-		properties[target.keyArg] = map[string]any{
-			"type":        "object",
-			"description": fmt.Sprintf("Key of the %s entity to call it on", target.entitySet),
-			"properties":  keyProperties,
-			"required":    keyRequired,
+	if function.IsBound {
+		if entitySetName, entityType, err := b.bindingEntitySet(function.BindingParameter.Type); err == nil {
+			keyProperties, keyRequired := b.buildKeySchema(entityType)
+			properties["key"] = map[string]any{
+				"type":        "object",
+				"description": fmt.Sprintf("Key of the %s entity to call it on", entitySetName),
+				"properties":  keyProperties,
+				"required":    keyRequired,
+			}
+			required = append(required, "key")
 		}
-		required = append(required, target.keyArg)
 	}
 
 	inputSchema := map[string]any{

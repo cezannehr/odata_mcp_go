@@ -82,7 +82,6 @@ type NavigationProperty struct {
 type EntityContainer struct {
 	XMLName         xml.Name         `xml:"EntityContainer"`
 	Name            string           `xml:"Name,attr"`
-	IsDefault       string           `xml:"http://schemas.microsoft.com/ado/2007/08/dataservices/metadata IsDefaultEntityContainer,attr"`
 	EntitySets      []EntitySet      `xml:"EntitySet"`
 	FunctionImports []FunctionImport `xml:"FunctionImport"`
 }
@@ -102,15 +101,12 @@ type EntitySet struct {
 
 // FunctionImport represents an OData function import
 type FunctionImport struct {
-	XMLName    xml.Name `xml:"FunctionImport"`
-	Name       string   `xml:"Name,attr"`
-	ReturnType string   `xml:"ReturnType,attr"`
-	HTTPMethod string   `xml:"http://schemas.microsoft.com/ado/2007/08/dataservices/metadata HttpMethod,attr"`
-	IsBindable string   `xml:"IsBindable,attr"`
-	// IsSideEffecting defaults to true; V3 marks a function, as opposed to an
-	// action, by setting it to "false".
-	IsSideEffecting string      `xml:"IsSideEffecting,attr"`
-	Parameters      []Parameter `xml:"Parameter"`
+	XMLName    xml.Name    `xml:"FunctionImport"`
+	Name       string      `xml:"Name,attr"`
+	ReturnType string      `xml:"ReturnType,attr"`
+	HTTPMethod string      `xml:"http://schemas.microsoft.com/ado/2007/08/dataservices/metadata HttpMethod,attr"`
+	IsBindable string      `xml:"IsBindable,attr"`
+	Parameters []Parameter `xml:"Parameter"`
 }
 
 // Parameter represents a function parameter
@@ -146,13 +142,6 @@ func ParseMetadata(data []byte, serviceRoot string) (*models.ODataMetadata, erro
 		ParsedAt:        time.Now(),
 	}
 
-	containers := 0
-	for _, schema := range edmx.DataServices.Schemas {
-		if schema.EntityContainer.Name != "" {
-			containers++
-		}
-	}
-
 	// Iterate over all schemas (SAP services often split EntityTypes and EntityContainer across schemas)
 	for _, schema := range edmx.DataServices.Schemas {
 		// Capture namespace from first schema that has one
@@ -184,9 +173,6 @@ func ParseMetadata(data []byte, serviceRoot string) (*models.ODataMetadata, erro
 			// Parse function imports from entity container
 			for _, fi := range schema.EntityContainer.FunctionImports {
 				functionImport := parseFunctionImport(fi)
-				if schema.EntityContainer.IsDefault != "true" && containers > 1 {
-					functionImport.Container = schema.EntityContainer.Name
-				}
 				metadata.FunctionImports[fi.Name] = functionImport
 			}
 		}
@@ -277,11 +263,7 @@ func parseFunctionImport(fi FunctionImport) *models.FunctionImport {
 
 	// A V3 function import with no m:HttpMethod is an action, which the
 	// protocol invokes with POST and which read-only modes must treat as
-	// modifying, unless it declares no side effects: then it is a function,
-	// invoked with GET.
-	if functionImport.HTTPMethod == "" && fi.IsSideEffecting == "false" {
-		functionImport.HTTPMethod = constants.GET
-	}
+	// modifying. Only declared GET operations are safe to call as reads.
 	if functionImport.HTTPMethod == "" {
 		functionImport.HTTPMethod = constants.POST
 		functionImport.IsAction = true
