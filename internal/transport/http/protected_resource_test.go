@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-const issuer = "https://hr.example.com/CezanneOnDemand"
+const issuer = "https://auth.example.com"
 
 func TestProtectedResourceMetadataIsOpenAndNamesTheIssuer(t *testing.T) {
 	mux := http.NewServeMux()
