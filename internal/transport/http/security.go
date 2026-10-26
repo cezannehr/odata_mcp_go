@@ -21,6 +21,7 @@ type SecurityConfig struct {
 	AllowAllInterfaces bool   // Explicit flag to allow 0.0.0.0/::
 	PerRequestAuth     bool   // Callers authenticate per request, so no shared token
 	AllowPlainHTTP     bool   // Serve plain HTTP off loopback, for a private network or behind a TLS proxy
+	AuthServer         string // Issuer MCP clients sign in with; empty publishes no OAuth metadata
 }
 
 // ValidateHTTPSecurity validates security configuration for HTTP transport.
@@ -161,7 +162,7 @@ func SecurityMiddleware(cfg SecurityConfig, next http.Handler) http.Handler {
 			return
 		}
 
-		if r.URL.Path == HealthPath {
+		if r.URL.Path == HealthPath || (cfg.AuthServer != "" && r.URL.Path == ProtectedResourcePath) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -175,6 +176,12 @@ func SecurityMiddleware(cfg SecurityConfig, next http.Handler) http.Handler {
 
 		if !AuthenticateRequest(r, cfg.Token) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="odata-mcp"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		if cfg.AuthServer != "" && r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate", protectedResourceChallenge(r))
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

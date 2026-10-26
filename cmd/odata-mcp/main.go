@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	nethttp "net/http"
@@ -139,6 +140,7 @@ func init() {
 	rootCmd.Flags().Bool("allow-plain-http", false, "Serve plain HTTP on a non-loopback address; only on a private network or behind a TLS-terminating proxy")
 	rootCmd.Flags().StringVar(&cfg.BearerToken, "bearer-token", "", "Bearer token presented to the OData service (overrides ODATA_BEARER_TOKEN env var)")
 	rootCmd.Flags().BoolVar(&cfg.MultiTenant, "multi-tenant", false, "Serve many callers from one process, each sending its own credential in the Authorization header")
+	rootCmd.Flags().String("authorization-server", "", "Issuer URL MCP clients sign in with; published as OAuth protected resource metadata (with --multi-tenant)")
 
 	// Debug options
 	rootCmd.Flags().Bool("trace-mcp", false, "Enable trace logging to debug MCP communication")
@@ -241,6 +243,10 @@ func runBridge(cmd *cobra.Command, args []string) error {
 		if cfg.ServiceURL != "" && cfg.Verbose {
 			fmt.Fprintf(os.Stderr, "[VERBOSE] Using ODATA_URL from environment.\n")
 		}
+	}
+
+	if authServer, _ := cmd.Flags().GetString("authorization-server"); authServer != "" && !cfg.MultiTenant {
+		return fmt.Errorf("--authorization-server requires --multi-tenant, the only mode that takes each caller's own credential")
 	}
 
 	if cfg.ServiceURL == "" && !cfg.MultiTenant {
@@ -780,6 +786,7 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 
 	// The caller's own credential is the gate, so no shared --mcp-token applies.
 	securityCfg.PerRequestAuth = true
+	securityCfg.AuthServer, _ = cmd.Flags().GetString("authorization-server")
 	if securityCfg.Token != "" {
 		return fmt.Errorf("--multi-tenant and --mcp-token are mutually exclusive: each caller authenticates with its own credential")
 	}
@@ -803,12 +810,13 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 	sharedCfg := *cfg
 	bridges := registry.New(tenant.Factory(&sharedCfg))
 
+	signInAvailable := securityCfg.AuthServer != ""
 	handler := func(ctx context.Context, msg *transport.Message) (*transport.Message, error) {
 		headers, _ := ctx.Value(client.HTTPHeadersContextKey).(nethttp.Header)
 
 		creds, err := resolver.Resolve(headers)
 		if err != nil {
-			return credentialFailure(msg, err), nil
+			return rejectCredential(msg, err, signInAvailable)
 		}
 
 		// Named on the request line before the build, so a request that fails
@@ -817,10 +825,21 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 
 		tenant, err := bridges.For(ctx, creds)
 		if err != nil {
+			if refusedByService(err.Error()) {
+				return rejectCredential(msg, err, signInAvailable)
+			}
 			return credentialFailure(msg, err), nil
 		}
 
-		return tenant.HandleMessage(ctx, msg)
+		response, err := tenant.HandleMessage(ctx, msg)
+		if signInAvailable && err == nil && response != nil && response.Error != nil && refusedByService(response.Error.Message) {
+			// Every retry with the same token would otherwise keep the cached
+			// bridge alive and fail the same way.
+			bridges.Evict(creds)
+			return nil, &transport.CredentialRejectedError{Err: errors.New(response.Error.Message)}
+		}
+
+		return response, err
 	}
 
 	if cfg.OAuthClientSecret != "" || cfg.BearerToken != "" {
@@ -858,6 +877,23 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 	case err := <-errChan:
 		return err
 	}
+}
+
+// Without an authorization server a 401 has nowhere to send the caller, so a
+// refusal keeps the JSON-RPC error it always had.
+func rejectCredential(msg *transport.Message, err error, signInAvailable bool) (*transport.Message, error) {
+	if signInAvailable {
+		return nil, &transport.CredentialRejectedError{Err: err}
+	}
+
+	return credentialFailure(msg, err), nil
+}
+
+// The OData client surfaces the upstream status only in its error text, ahead
+// of any upstream body, so the first "HTTP nnn" is the real status.
+func refusedByService(message string) bool {
+	_, rest, found := strings.Cut(message, "HTTP ")
+	return found && strings.HasPrefix(rest, "401")
 }
 
 // credentialFailure reports a rejected credential as a JSON-RPC error, so the

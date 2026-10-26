@@ -553,6 +553,8 @@ claude mcp add --transport http my-hr http://127.0.0.1:8080/mcp \
 
 The `tr` matters on Linux, where `base64` wraps long output and breaks the header.
 
+With `--authorization-server <issuer URL>` (through `ODATA_MCP_EXTRA_FLAGS` with docker compose), MCP clients such as Claude Code can sign users in themselves. The bridge serves RFC 9728 metadata at `/.well-known/oauth-protected-resource/mcp` naming the issuer, and answers a request with no credential, or a token the service refuses, with 401 and a `WWW-Authenticate` header pointing at it. The signed-in user's token is passed to the OData service as is. The MCP spec asks servers not to pass tokens through; here it's deliberate, since the bridge has no privileges of its own.
+
 What the server enforces in this mode:
 
 - A request with no credential is refused. A secret configured on the server (`OAUTH_CLIENT_SECRET`, `ODATA_BEARER_TOKEN`) is never lent to a caller that did not send one.
@@ -792,6 +794,7 @@ The OData MCP bridge includes a flexible hint system to provide guidance for ser
 | `--allow-all-interfaces` | Allow binding to 0.0.0.0/:: (requires --mcp-token and --tls) | `false` |
 | `--allow-plain-http` | Serve plain HTTP on a non-loopback address (private network or behind a TLS proxy) | `false` |
 | `--multi-tenant` | Serve many callers of one OData service, each sending its own credential in `Authorization`; requires `--service` and `--oauth-token-url` | `false` |
+| `--authorization-server` | Issuer URL MCP clients sign in with (OAuth protected resource metadata); requires `--multi-tenant` | |
 | `--legacy-dates` | Enable legacy date format conversion | `true` |
 | `--no-legacy-dates` | Disable legacy date format conversion | `false` |
 | `--convert-dates-from-sap` | Convert SAP date formats in responses | `false` |

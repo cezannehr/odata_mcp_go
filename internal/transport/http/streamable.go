@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -69,6 +70,10 @@ func (t *StreamableHTTPTransport) Start(ctx context.Context) error {
 	// Legacy SSE endpoint for backward compatibility
 	mux.HandleFunc("/sse", t.handleLegacySSE)
 
+	if t.security.AuthServer != "" {
+		mux.Handle(ProtectedResourcePath, ProtectedResourceHandler(t.security.AuthServer))
+	}
+
 	t.server = newHTTPServer(t.security, mux)
 
 	// Start cleanup routine for stale streams
@@ -122,6 +127,13 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 
 	// Process the message with enriched context
 	response, err := t.handler(ctx, &msg)
+	var rejected *transport.CredentialRejectedError
+	if errors.As(err, &rejected) {
+		record.Add(slog.String("error", rejected.Error()))
+		w.Header().Set("WWW-Authenticate", protectedResourceChallenge(r))
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	if err != nil {
 		response = &transport.Message{
 			JSONRPC: "2.0",
