@@ -82,6 +82,7 @@ type NavigationProperty struct {
 type EntityContainer struct {
 	XMLName         xml.Name         `xml:"EntityContainer"`
 	Name            string           `xml:"Name,attr"`
+	IsDefault       string           `xml:"http://schemas.microsoft.com/ado/2007/08/dataservices/metadata IsDefaultEntityContainer,attr"`
 	EntitySets      []EntitySet      `xml:"EntitySet"`
 	FunctionImports []FunctionImport `xml:"FunctionImport"`
 }
@@ -173,6 +174,9 @@ func ParseMetadata(data []byte, serviceRoot string) (*models.ODataMetadata, erro
 			// Parse function imports from entity container
 			for _, fi := range schema.EntityContainer.FunctionImports {
 				functionImport := parseFunctionImport(fi)
+				if schema.EntityContainer.IsDefault != "true" {
+					functionImport.Container = schema.EntityContainer.Name
+				}
 				metadata.FunctionImports[fi.Name] = functionImport
 			}
 		}

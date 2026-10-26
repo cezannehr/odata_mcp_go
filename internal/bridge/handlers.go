@@ -428,11 +428,15 @@ func (b *ODataMCPBridge) handleFunctionCall(ctx context.Context, functionName st
 	var response *models.ODataResponse
 	var err error
 	if function.IsBound {
-		entitySetName, key, keyErr := b.bindingKey(function, args)
+		target, bindErr := b.resolveBinding(function)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		key, keyErr := target.key(args)
 		if keyErr != nil {
 			return nil, keyErr
 		}
-		response, err = b.client.CallBoundFunction(ctx, entitySetName, key, functionName, parameters, method)
+		response, err = b.client.CallBoundFunction(ctx, target.entitySet, key, boundOperationName(functionName, function), parameters, method)
 	} else {
 		response, err = b.client.CallFunction(ctx, functionName, parameters, method)
 	}
@@ -449,29 +453,82 @@ func (b *ODataMCPBridge) handleFunctionCall(ctx context.Context, functionName st
 	return string(result), nil
 }
 
-// bindingKey reads the entity a bound function acts on from the caller's
-// "key" argument, typed the same way as a get or delete key.
-func (b *ODataMCPBridge) bindingKey(function *models.FunctionImport, args map[string]any) (string, map[string]any, error) {
-	entitySetName, entityType, err := b.bindingEntitySet(function.BindingParameter.Type)
+const (
+	bindingKeyArg = "key"
+	// bindingKeyArgFallback carries the key when the function declares its
+	// own parameter called "key", which would otherwise be shadowed.
+	bindingKeyArgFallback = "binding_key"
+)
+
+type binding struct {
+	entitySet  string
+	entityType *models.EntityType
+	keyArg     string
+}
+
+func (b *ODataMCPBridge) resolveBinding(function *models.FunctionImport) (*binding, error) {
+	typeName, isCollection := collectionElementType(function.BindingParameter.Type)
+	entitySetName, entityType, err := b.bindingEntitySet(typeName)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 
-	keyArg, ok := args["key"].(map[string]any)
+	target := &binding{entitySet: entitySetName, entityType: entityType}
+	if !isCollection {
+		target.keyArg = bindingKeyArgFor(function)
+	}
+
+	return target, nil
+}
+
+func collectionElementType(typeName string) (string, bool) {
+	if strings.HasPrefix(typeName, "Collection(") && strings.HasSuffix(typeName, ")") {
+		return typeName[len("Collection(") : len(typeName)-1], true
+	}
+
+	return typeName, false
+}
+
+func bindingKeyArgFor(function *models.FunctionImport) string {
+	for _, param := range function.Parameters {
+		if param.Name == bindingKeyArg {
+			return bindingKeyArgFallback
+		}
+	}
+
+	return bindingKeyArg
+}
+
+func (target *binding) key(args map[string]any) (map[string]any, error) {
+	if target.keyArg == "" {
+		return nil, nil
+	}
+
+	keyArg, ok := args[target.keyArg].(map[string]any)
 	if !ok {
-		return "", nil, fmt.Errorf("missing required parameter: key (the %s entity to call it on)", entitySetName)
+		return nil, fmt.Errorf("missing required parameter: %s (the %s entity to call it on)", target.keyArg, target.entitySet)
 	}
 
-	key := make(map[string]any, len(entityType.KeyProperties))
-	for _, keyProp := range entityType.KeyProperties {
+	key := make(map[string]any, len(target.entityType.KeyProperties))
+	for _, keyProp := range target.entityType.KeyProperties {
 		value, exists := keyArg[keyProp]
 		if !exists {
-			return "", nil, fmt.Errorf("missing required key property: %s", keyProp)
+			return nil, fmt.Errorf("missing required key property: %s", keyProp)
 		}
-		key[keyProp] = wrapKeyValueForType(value, getPropertyType(entityType, keyProp))
+		key[keyProp] = wrapKeyValueForType(value, getPropertyType(target.entityType, keyProp))
 	}
 
-	return entitySetName, key, nil
+	return key, nil
+}
+
+// boundOperationName qualifies the name only outside the default container,
+// where the protocol requires it; inside, the bare name is what servers expect.
+func boundOperationName(functionName string, function *models.FunctionImport) string {
+	if function.Container == "" {
+		return functionName
+	}
+
+	return function.Container + "." + functionName
 }
 
 // bindingEntitySet finds the entity set to address a bound function through.
