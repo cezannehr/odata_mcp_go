@@ -2,6 +2,8 @@ module github.com/zmcp/odata-mcp
 
 go 1.24
 
+toolchain go1.24.5
+
 require (
 	github.com/joho/godotenv v1.5.1
 	github.com/spf13/cobra v1.8.0
