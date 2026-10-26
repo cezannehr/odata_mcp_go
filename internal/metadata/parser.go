@@ -105,6 +105,7 @@ type FunctionImport struct {
 	Name       string      `xml:"Name,attr"`
 	ReturnType string      `xml:"ReturnType,attr"`
 	HTTPMethod string      `xml:"http://schemas.microsoft.com/ado/2007/08/dataservices/metadata HttpMethod,attr"`
+	IsBindable string      `xml:"IsBindable,attr"`
 	Parameters []Parameter `xml:"Parameter"`
 }
 
@@ -268,8 +269,19 @@ func parseFunctionImport(fi FunctionImport) *models.FunctionImport {
 		functionImport.IsAction = true
 	}
 
-	// Parse parameters
-	for _, param := range fi.Parameters {
+	params := fi.Parameters
+	// A bindable V3 function import names its binding entity in the first
+	// parameter; the caller addresses that entity in the URL, not the body.
+	if fi.IsBindable == "true" && len(params) > 0 {
+		functionImport.IsBound = true
+		functionImport.BindingParameter = &models.FunctionParameter{
+			Name: params[0].Name,
+			Type: params[0].Type,
+		}
+		params = params[1:]
+	}
+
+	for _, param := range params {
 		parameter := &models.FunctionParameter{
 			Name:     param.Name,
 			Type:     param.Type,

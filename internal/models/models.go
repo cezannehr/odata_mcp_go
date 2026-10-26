@@ -73,8 +73,11 @@ type FunctionImport struct {
 	ReturnType  string               `json:"return_type,omitempty"`
 	Parameters  []*FunctionParameter `json:"parameters"`
 	Description *string              `json:"description,omitempty"`
-	IsBound     bool                 `json:"is_bound,omitempty"`  // v4 only
-	IsAction    bool                 `json:"is_action,omitempty"` // v4 only (true for actions, false for functions)
+	IsBound     bool                 `json:"is_bound,omitempty"`
+	IsAction    bool                 `json:"is_action,omitempty"`
+	// BindingParameter is the entity a bound operation is invoked on. It is
+	// addressed in the URL, so it is kept out of Parameters.
+	BindingParameter *FunctionParameter `json:"binding_parameter,omitempty"`
 }
 
 // FunctionParameter represents a parameter for a function/action

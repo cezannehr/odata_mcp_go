@@ -131,6 +131,7 @@ Examples:
   action="get" target="Products" params={"key":{"ID":123}}
   action="create" target="Orders" params={"data":{"CustomerID":"C001"}}
   action="call" target="ReleaseOrder" params={"OrderID":"O001"}
+  action="call" target="Orders_Cancel" params={"key":{"ID":123},"reason":"duplicate"} - bound to one entity
   action="info" target="Products" - properties, key and operations of Products
   action="info" (no target) - service details and these hints again
 `)
@@ -148,6 +149,9 @@ Examples:
 // formatFunctionParams formats function parameters for the description
 func (b *ODataMCPBridge) formatFunctionParams(fn *models.FunctionImport) string {
 	var params []string
+	if entitySetName, ok := b.boundEntitySetName(fn); ok {
+		params = append(params, fmt.Sprintf("key: %s key", entitySetName))
+	}
 	for _, p := range fn.Parameters {
 		if p.Mode == "In" || p.Mode == "InOut" {
 			params = append(params, fmt.Sprintf("%s: %s", p.Name, p.Type))
@@ -468,13 +472,29 @@ func (b *ODataMCPBridge) describeFunction(name string, function *models.Function
 		}
 	}
 
-	return map[string]any{
+	info := map[string]any{
 		"function":    name,
 		"http_method": function.HTTPMethod,
 		"return_type": function.ReturnType,
 		"parameters":  parameters,
 		"callable":    !b.config.ReadOnly && (b.config.AllowModifyingFunctions() || !b.isFunctionModifying(function)),
 	}
+	if entitySetName, ok := b.boundEntitySetName(function); ok {
+		info["bound_to"] = entitySetName
+	}
+
+	return info
+}
+
+func (b *ODataMCPBridge) boundEntitySetName(function *models.FunctionImport) (string, bool) {
+	if !function.IsBound {
+		return "", false
+	}
+	entitySetName, _, err := b.bindingEntitySet(function.BindingParameter.Type)
+	if err != nil {
+		return "", false
+	}
+	return entitySetName, true
 }
 
 // entitySetOperations lists what a caller may do to an entity set here, which

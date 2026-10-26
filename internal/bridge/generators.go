@@ -429,6 +429,19 @@ func (b *ODataMCPBridge) generateFunctionTool(functionName string, function *mod
 		}
 	}
 
+	if function.IsBound {
+		if entitySetName, entityType, err := b.bindingEntitySet(function.BindingParameter.Type); err == nil {
+			keyProperties, keyRequired := b.buildKeySchema(entityType)
+			properties["key"] = map[string]any{
+				"type":        "object",
+				"description": fmt.Sprintf("Key of the %s entity to call it on", entitySetName),
+				"properties":  keyProperties,
+				"required":    keyRequired,
+			}
+			required = append(required, "key")
+		}
+	}
+
 	inputSchema := map[string]any{
 		"type":       "object",
 		"properties": properties,
