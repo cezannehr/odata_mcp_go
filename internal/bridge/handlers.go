@@ -521,8 +521,8 @@ func (target *binding) key(args map[string]any) (map[string]any, error) {
 	return key, nil
 }
 
-// boundOperationName qualifies the name only outside the default container,
-// where the protocol requires it; inside, the bare name is what servers expect.
+// V3 never says when to qualify; its examples do, and WCF accepts bare names
+// in the default container, so only names outside it get the container prefix.
 func boundOperationName(functionName string, function *models.FunctionImport) string {
 	if function.Container == "" {
 		return functionName
@@ -533,7 +533,7 @@ func boundOperationName(functionName string, function *models.FunctionImport) st
 
 // bindingEntitySet finds the entity set to address a bound function through.
 // Metadata only names the binding entity type, so a type exposed by several
-// entity sets cannot be resolved without guessing.
+// entity sets cannot be resolved without guessing; --entities can narrow it.
 func (b *ODataMCPBridge) bindingEntitySet(typeName string) (string, *models.EntityType, error) {
 	entityType := b.lookupEntityType(typeName)
 	if entityType == nil {
@@ -542,14 +542,14 @@ func (b *ODataMCPBridge) bindingEntitySet(typeName string) (string, *models.Enti
 
 	var matches []string
 	for name, entitySet := range b.metadata.EntitySets {
-		if b.lookupEntityType(entitySet.EntityType) == entityType {
+		if b.shouldIncludeEntity(name) && b.lookupEntityType(entitySet.EntityType) == entityType {
 			matches = append(matches, name)
 		}
 	}
 
 	if len(matches) != 1 {
 		slices.Sort(matches)
-		return "", nil, fmt.Errorf("binding type %s must belong to exactly one entity set, found %d %v", typeName, len(matches), matches)
+		return "", nil, fmt.Errorf("binding type %s must belong to exactly one exposed entity set, found %d %v", typeName, len(matches), matches)
 	}
 
 	return matches[0], entityType, nil

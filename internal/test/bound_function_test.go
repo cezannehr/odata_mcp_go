@@ -151,7 +151,12 @@ func TestBoundFunctionToolAsksForTheEntityKey(t *testing.T) {
 }
 
 func TestBoundFunctionOutsideTheDefaultContainerIsQualified(t *testing.T) {
-	service, recorded := newBoundFunctionServiceWith(t, boundFunctionMetadata("", ordersSet, cancelOrder))
+	otherDefault := `<Schema Namespace="Other" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+      <EntityContainer Name="OtherContainer" m:IsDefaultEntityContainer="true"/>
+    </Schema>
+  </edmx:DataServices>`
+	metadataXML := strings.Replace(boundFunctionMetadata(`m:IsDefaultEntityContainer="false"`, ordersSet, cancelOrder), "</edmx:DataServices>", otherDefault, 1)
+	service, recorded := newBoundFunctionServiceWith(t, metadataXML)
 	odataBridge, _ := universalTool(t, universalConfig(service.URL+"/odata/"))
 
 	_, rpcErr := callUniversalTool(t, odataBridge, map[string]any{
@@ -206,7 +211,7 @@ func TestBoundFunctionOnAnAmbiguousTypeIsNotOffered(t *testing.T) {
 		"params": map[string]any{"key": map[string]any{"OrderGUID": orderGUID}, "reason": "duplicate"},
 	})
 	require.NotNil(t, rpcErr)
-	assert.Contains(t, string(rpcErr.Data), "must belong to exactly one entity set")
+	assert.Contains(t, string(rpcErr.Data), "must belong to exactly one exposed entity set")
 	assert.Empty(t, recorded())
 }
 
@@ -229,4 +234,59 @@ func TestBoundFunctionWithItsOwnKeyParameterTakesTheEntityKeyElsewhere(t *testin
 	require.Len(t, posts, 1)
 	assert.Equal(t, "/odata/Orders(guid'"+orderGUID+"')/Orders_Tag", posts[0].path)
 	assert.Equal(t, map[string]any{"key": "priority"}, posts[0].body)
+}
+
+func TestBoundFunctionInALoneUnmarkedContainerKeepsTheBareName(t *testing.T) {
+	service, recorded := newBoundFunctionServiceWith(t, boundFunctionMetadata("", ordersSet, cancelOrder))
+	odataBridge, _ := universalTool(t, universalConfig(service.URL+"/odata/"))
+
+	_, rpcErr := callUniversalTool(t, odataBridge, map[string]any{
+		"action": "call",
+		"target": "Orders_Cancel",
+		"params": map[string]any{"key": map[string]any{"OrderGUID": orderGUID}, "reason": "duplicate"},
+	})
+	require.Nil(t, rpcErr)
+
+	posts := recorded()
+	require.Len(t, posts, 1)
+	assert.Equal(t, "/odata/Orders(guid'"+orderGUID+"')/Orders_Cancel", posts[0].path,
+		"a single container is the default one even when the attribute is missing")
+}
+
+func TestBoundFunctionFollowsTheEntityFilter(t *testing.T) {
+	twoSets := ordersSet + `<EntitySet Name="ArchivedOrders" EntityType="Test.Order"/>`
+	service, recorded := newBoundFunctionServiceWith(t, boundFunctionMetadata(defaultContainer, twoSets, cancelOrder))
+
+	narrowed := universalConfig(service.URL + "/odata/")
+	narrowed.AllowedEntities = []string{"ArchivedOrders"}
+	odataBridge, _ := universalTool(t, narrowed)
+
+	_, rpcErr := callUniversalTool(t, odataBridge, map[string]any{
+		"action": "call",
+		"target": "Orders_Cancel",
+		"params": map[string]any{"key": map[string]any{"OrderGUID": orderGUID}, "reason": "duplicate"},
+	})
+	require.Nil(t, rpcErr)
+
+	posts := recorded()
+	require.Len(t, posts, 1)
+	assert.Equal(t, "/odata/ArchivedOrders(guid'"+orderGUID+"')/Orders_Cancel", posts[0].path,
+		"the filter leaves one entity set, so the binding is no longer ambiguous")
+}
+
+func TestBoundFunctionOnAFilteredOutEntitySetIsNotOffered(t *testing.T) {
+	service, recorded := newBoundFunctionServiceWith(t, boundFunctionMetadataXML)
+
+	filtered := universalConfig(service.URL + "/odata/")
+	filtered.AllowedEntities = []string{"Customers"}
+	odataBridge, _ := universalTool(t, filtered)
+
+	_, rpcErr := callUniversalTool(t, odataBridge, map[string]any{
+		"action": "call",
+		"target": "Orders_Cancel",
+		"params": map[string]any{"key": map[string]any{"OrderGUID": orderGUID}, "reason": "duplicate"},
+	})
+	require.NotNil(t, rpcErr)
+	assert.Contains(t, string(rpcErr.Data), "exactly one exposed entity set")
+	assert.Empty(t, recorded())
 }

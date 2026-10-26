@@ -143,6 +143,13 @@ func ParseMetadata(data []byte, serviceRoot string) (*models.ODataMetadata, erro
 		ParsedAt:        time.Now(),
 	}
 
+	containers := 0
+	for _, schema := range edmx.DataServices.Schemas {
+		if schema.EntityContainer.Name != "" {
+			containers++
+		}
+	}
+
 	// Iterate over all schemas (SAP services often split EntityTypes and EntityContainer across schemas)
 	for _, schema := range edmx.DataServices.Schemas {
 		// Capture namespace from first schema that has one
@@ -174,7 +181,7 @@ func ParseMetadata(data []byte, serviceRoot string) (*models.ODataMetadata, erro
 			// Parse function imports from entity container
 			for _, fi := range schema.EntityContainer.FunctionImports {
 				functionImport := parseFunctionImport(fi)
-				if schema.EntityContainer.IsDefault != "true" {
+				if schema.EntityContainer.IsDefault != "true" && containers > 1 {
 					functionImport.Container = schema.EntityContainer.Name
 				}
 				metadata.FunctionImports[fi.Name] = functionImport
