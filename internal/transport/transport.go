@@ -26,6 +26,9 @@ type Error struct {
 // makes an OAuth client sign in again; a JSON-RPC error never does.
 type CredentialRejectedError struct {
 	Err error
+	// TokenRefused is set when the service turned the token down, as opposed
+	// to the request carrying no usable credential at all.
+	TokenRefused bool
 }
 
 func (e *CredentialRejectedError) Error() string { return e.Err.Error() }

@@ -553,6 +553,21 @@ claude mcp add --transport http my-hr http://127.0.0.1:8080/mcp \
 
 The `tr` matters on Linux, where `base64` wraps long output and breaks the header.
 
+#### Signing in with OAuth
+
+If the OAuth server behind the OData service supports the authorization code grant with PKCE, MCP clients can sign users in themselves. Point the bridge at it with `--authorization-server` (with docker compose, through `ODATA_MCP_EXTRA_FLAGS`):
+
+```bash
+./odata-mcp --universal --multi-tenant --transport streamable-http \
+  --service https://tenant.example.com/odata/service.svc/ \
+  --oauth-token-url https://tenant.example.com/oauth/token \
+  --authorization-server https://tenant.example.com/oauth
+```
+
+The bridge then serves RFC 9728 metadata at `/.well-known/oauth-protected-resource/mcp` (and `/sse`) naming that issuer. A request with no credential gets a 401 whose `WWW-Authenticate` header points at the metadata, which is what makes a client such as Claude Code start the sign-in. A Bearer token the service refuses gets a 401 with `error="invalid_token"`, so the client signs in again. Basic credentials work as before and keep getting JSON-RPC errors, since they can't follow an OAuth challenge.
+
+The signed-in user's token is passed to the OData service as is, and the bridge does not check its audience. The MCP authorization spec asks servers not to do that. Here it's deliberate: the bridge is a thin proxy with no privileges of its own, so a token can do nothing through it that it couldn't do against the service directly.
+
 What the server enforces in this mode:
 
 - A request with no credential is refused. A secret configured on the server (`OAUTH_CLIENT_SECRET`, `ODATA_BEARER_TOKEN`) is never lent to a caller that did not send one.
@@ -792,6 +807,7 @@ The OData MCP bridge includes a flexible hint system to provide guidance for ser
 | `--allow-all-interfaces` | Allow binding to 0.0.0.0/:: (requires --mcp-token and --tls) | `false` |
 | `--allow-plain-http` | Serve plain HTTP on a non-loopback address (private network or behind a TLS proxy) | `false` |
 | `--multi-tenant` | Serve many callers of one OData service, each sending its own credential in `Authorization`; requires `--service` and `--oauth-token-url` | `false` |
+| `--authorization-server` | Issuer URL MCP clients sign in with; publishes OAuth protected resource metadata and challenges unauthenticated requests. Requires `--multi-tenant` | |
 | `--legacy-dates` | Enable legacy date format conversion | `true` |
 | `--no-legacy-dates` | Disable legacy date format conversion | `false` |
 | `--convert-dates-from-sap` | Convert SAP date formats in responses | `false` |

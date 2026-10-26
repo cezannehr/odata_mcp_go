@@ -817,7 +817,7 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 
 		creds, err := resolver.Resolve(headers)
 		if err != nil {
-			return rejectCredential(msg, err, challenge)
+			return rejectCredential(msg, &transport.CredentialRejectedError{Err: err}, challenge)
 		}
 
 		// Named on the request line before the build, so a request that fails
@@ -827,14 +827,15 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 		tenant, err := bridges.For(ctx, creds)
 		if err != nil {
 			if refusedByService(err.Error()) {
-				return rejectCredential(msg, err, challenge)
+				return rejectCredential(msg, &transport.CredentialRejectedError{Err: err, TokenRefused: true}, challenge)
 			}
 			return credentialFailure(msg, err), nil
 		}
 
 		response, err := tenant.HandleMessage(ctx, msg)
-		if err == nil && response != nil && response.Error != nil && refusedByService(response.Error.Message) {
-			return rejectCredential(response, errors.New(response.Error.Message), challenge)
+		if challenge && err == nil && response != nil && response.Error != nil &&
+			refusedByService(response.Error.Message) && tokenRefused(ctx, bridges, creds) {
+			return nil, &transport.CredentialRejectedError{Err: errors.New(response.Error.Message), TokenRefused: true}
 		}
 
 		return response, err
@@ -879,15 +880,20 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 
 // Without an authorization server a 401 has nowhere to send the caller, so a
 // refusal keeps the JSON-RPC error it always had.
-func rejectCredential(failed *transport.Message, err error, challenge bool) (*transport.Message, error) {
+func rejectCredential(msg *transport.Message, rejected *transport.CredentialRejectedError, challenge bool) (*transport.Message, error) {
 	if challenge {
-		return nil, &transport.CredentialRejectedError{Err: err}
-	}
-	if failed.Error != nil {
-		return failed, nil
+		return nil, rejected
 	}
 
-	return credentialFailure(failed, err), nil
+	return credentialFailure(msg, rejected.Err), nil
+}
+
+// A 401 on one call can mean that resource is off limits rather than the
+// token dead, so the token is retried on $metadata, which any valid one reads.
+func tokenRefused(ctx context.Context, bridges *registry.Registry, creds registry.Credentials) bool {
+	bridges.Evict(creds)
+	_, err := bridges.For(ctx, creds)
+	return err != nil && refusedByService(err.Error())
 }
 
 // Basic callers authenticate with a client secret and cannot follow an OAuth
@@ -897,9 +903,11 @@ func signsInWithOAuth(headers nethttp.Header) bool {
 	return !strings.EqualFold(scheme, "basic")
 }
 
-// The OData client surfaces the upstream status only in its error text.
+// The OData client surfaces the upstream status only in its error text, ahead
+// of any upstream body, so the first "HTTP nnn" is the real status.
 func refusedByService(message string) bool {
-	return strings.Contains(message, "HTTP 401")
+	_, rest, found := strings.Cut(message, "HTTP ")
+	return found && strings.HasPrefix(rest, "401")
 }
 
 // credentialFailure reports a rejected credential as a JSON-RPC error, so the

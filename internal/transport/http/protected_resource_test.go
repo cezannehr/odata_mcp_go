@@ -131,7 +131,7 @@ func TestOriginTakesTheClientsSchemeFromAProxyChain(t *testing.T) {
 
 func TestRejectedCredentialIsAnsweredWithAChallenge(t *testing.T) {
 	handler := func(ctx context.Context, msg *transport.Message) (*transport.Message, error) {
-		return nil, &transport.CredentialRejectedError{Err: errors.New("HTTP 401: token expired")}
+		return nil, &transport.CredentialRejectedError{Err: errors.New("HTTP 401: token expired"), TokenRefused: true}
 	}
 	tr := NewStreamableHTTP(SecurityConfig{PerRequestAuth: true, AuthServer: issuer}, handler, true)
 
@@ -177,5 +177,22 @@ func TestBrowserClientsCanReadTheChallengeAndMetadata(t *testing.T) {
 	ProtectedResourceHandler(issuer).ServeHTTP(rec, meta)
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
 		t.Errorf("metadata Access-Control-Allow-Origin = %q, want *", got)
+	}
+}
+
+func TestUnusableCredentialIsChallengedWithoutAnErrorCode(t *testing.T) {
+	handler := func(ctx context.Context, msg *transport.Message) (*transport.Message, error) {
+		return nil, &transport.CredentialRejectedError{Err: errors.New("unsupported scheme")}
+	}
+	tr := NewStreamableHTTP(SecurityConfig{PerRequestAuth: true, AuthServer: issuer}, handler, true)
+
+	req := httptest.NewRequest(http.MethodPost, "http://mcp.example.com/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	req.Header.Set("Authorization", "Token something-odd")
+	rec := httptest.NewRecorder()
+	tr.handleMCP(rec, req)
+
+	want := `Bearer resource_metadata="http://mcp.example.com/.well-known/oauth-protected-resource/mcp"`
+	if got := rec.Header().Get("WWW-Authenticate"); rec.Code != http.StatusUnauthorized || got != want {
+		t.Errorf("status = %d, WWW-Authenticate = %q; want 401 and %q, since RFC 6750 names no error for an unsupported method", rec.Code, got, want)
 	}
 }
