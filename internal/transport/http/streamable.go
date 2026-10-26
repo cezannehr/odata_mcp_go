@@ -71,9 +71,7 @@ func (t *StreamableHTTPTransport) Start(ctx context.Context) error {
 	mux.HandleFunc("/sse", t.handleLegacySSE)
 
 	if t.security.AuthServer != "" {
-		for _, path := range protectedResourcePaths {
-			mux.Handle(ProtectedResourcePrefix+path, ProtectedResourceHandler(t.security.AuthServer))
-		}
+		mux.Handle(ProtectedResourcePath, ProtectedResourceHandler(t.security.AuthServer))
 	}
 
 	t.server = newHTTPServer(t.security, mux)
@@ -132,11 +130,7 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 	var rejected *transport.CredentialRejectedError
 	if errors.As(err, &rejected) {
 		record.Add(slog.String("error", rejected.Error()))
-		challenge := protectedResourceChallenge(r)
-		if rejected.TokenRefused {
-			challenge = invalidTokenChallenge(r)
-		}
-		w.Header().Set("WWW-Authenticate", challenge)
+		w.Header().Set("WWW-Authenticate", protectedResourceChallenge(r))
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
