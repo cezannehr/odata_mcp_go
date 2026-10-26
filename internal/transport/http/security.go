@@ -155,6 +155,7 @@ func SecurityMiddleware(cfg SecurityConfig, next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Last-Event-ID, Authorization")
+			w.Header().Set("Access-Control-Expose-Headers", "WWW-Authenticate")
 		}
 
 		if r.Method == http.MethodOptions {
@@ -180,7 +181,7 @@ func SecurityMiddleware(cfg SecurityConfig, next http.Handler) http.Handler {
 			return
 		}
 
-		if cfg.AuthServer != "" && r.Header.Get("Authorization") == "" {
+		if cfg.AuthServer != "" && r.Header.Get("Authorization") == "" && isProtectedResource(r.URL.Path) {
 			w.Header().Set("WWW-Authenticate", protectedResourceChallenge(r))
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return

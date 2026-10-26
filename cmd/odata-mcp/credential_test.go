@@ -5,6 +5,7 @@ package main
 
 import (
 	"errors"
+	nethttp "net/http"
 	"testing"
 
 	"github.com/zmcp/odata-mcp/internal/transport"
@@ -45,6 +46,25 @@ func TestOnlyAnUpstream401CountsAsARefusedCredential(t *testing.T) {
 	for message, want := range cases {
 		if got := refusedByService(message); got != want {
 			t.Errorf("refusedByService(%q) = %v, want %v", message, got, want)
+		}
+	}
+}
+
+func TestOnlyBasicCallersAreKeptOffTheOAuthChallenge(t *testing.T) {
+	cases := map[string]bool{
+		"":                    true,
+		"Bearer some-token":   true,
+		"Basic aWQ6c2VjcmV0":  false,
+		"basic aWQ6c2VjcmV0":  false,
+		"Token something-odd": true,
+	}
+	for header, want := range cases {
+		headers := nethttp.Header{}
+		if header != "" {
+			headers.Set("Authorization", header)
+		}
+		if got := signsInWithOAuth(headers); got != want {
+			t.Errorf("signsInWithOAuth(%q) = %v, want %v", header, got, want)
 		}
 	}
 }

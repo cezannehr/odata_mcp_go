@@ -144,8 +144,38 @@ func TestRejectedCredentialIsAnsweredWithAChallenge(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 so the client signs in again", rec.Code)
 	}
-	want := `Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"`
+	want := `Bearer error="invalid_token", resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"`
 	if got := rec.Header().Get("WWW-Authenticate"); got != want {
 		t.Errorf("WWW-Authenticate = %q, want %q", got, want)
+	}
+}
+
+func TestUnknownPathIsNotChallenged(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://mcp.example.com/nothing-here", nil)
+	reached := false
+	rec := httptest.NewRecorder()
+	SecurityMiddleware(SecurityConfig{PerRequestAuth: true, AuthServer: issuer}, reachedHandler(&reached)).ServeHTTP(rec, req)
+
+	if !reached || rec.Header().Get("WWW-Authenticate") != "" {
+		t.Errorf("reached = %v, WWW-Authenticate = %q; want the mux to answer it without a challenge pointing at metadata that does not exist",
+			reached, rec.Header().Get("WWW-Authenticate"))
+	}
+}
+
+func TestBrowserClientsCanReadTheChallengeAndMetadata(t *testing.T) {
+	cfg := SecurityConfig{PerRequestAuth: true, AuthServer: issuer}
+
+	req := httptest.NewRequest(http.MethodPost, "http://localhost:9090/mcp", strings.NewReader("{}"))
+	rec := httptest.NewRecorder()
+	SecurityMiddleware(cfg, reachedHandler(new(bool))).ServeHTTP(rec, req)
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "WWW-Authenticate" {
+		t.Errorf("Access-Control-Expose-Headers = %q, want WWW-Authenticate", got)
+	}
+
+	meta := httptest.NewRequest(http.MethodGet, "http://mcp.example.com"+ProtectedResourcePrefix+"/mcp", nil)
+	rec = httptest.NewRecorder()
+	ProtectedResourceHandler(issuer).ServeHTTP(rec, meta)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("metadata Access-Control-Allow-Origin = %q, want *", got)
 	}
 }

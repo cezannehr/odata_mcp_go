@@ -813,10 +813,11 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 	signInAvailable := securityCfg.AuthServer != ""
 	handler := func(ctx context.Context, msg *transport.Message) (*transport.Message, error) {
 		headers, _ := ctx.Value(client.HTTPHeadersContextKey).(nethttp.Header)
+		challenge := signInAvailable && signsInWithOAuth(headers)
 
 		creds, err := resolver.Resolve(headers)
 		if err != nil {
-			return rejectCredential(msg, err, signInAvailable)
+			return rejectCredential(msg, err, challenge)
 		}
 
 		// Named on the request line before the build, so a request that fails
@@ -826,14 +827,14 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 		tenant, err := bridges.For(ctx, creds)
 		if err != nil {
 			if refusedByService(err.Error()) {
-				return rejectCredential(msg, err, signInAvailable)
+				return rejectCredential(msg, err, challenge)
 			}
 			return credentialFailure(msg, err), nil
 		}
 
 		response, err := tenant.HandleMessage(ctx, msg)
 		if err == nil && response != nil && response.Error != nil && refusedByService(response.Error.Message) {
-			return rejectCredential(response, errors.New(response.Error.Message), signInAvailable)
+			return rejectCredential(response, errors.New(response.Error.Message), challenge)
 		}
 
 		return response, err
@@ -878,8 +879,8 @@ func runMultiTenant(cmd *cobra.Command, cfg *config.Config, sigChan chan os.Sign
 
 // Without an authorization server a 401 has nowhere to send the caller, so a
 // refusal keeps the JSON-RPC error it always had.
-func rejectCredential(failed *transport.Message, err error, signInAvailable bool) (*transport.Message, error) {
-	if signInAvailable {
+func rejectCredential(failed *transport.Message, err error, challenge bool) (*transport.Message, error) {
+	if challenge {
 		return nil, &transport.CredentialRejectedError{Err: err}
 	}
 	if failed.Error != nil {
@@ -887,6 +888,13 @@ func rejectCredential(failed *transport.Message, err error, signInAvailable bool
 	}
 
 	return credentialFailure(failed, err), nil
+}
+
+// Basic callers authenticate with a client secret and cannot follow an OAuth
+// challenge, so they keep the JSON-RPC error that says what was refused.
+func signsInWithOAuth(headers nethttp.Header) bool {
+	scheme, _, _ := strings.Cut(strings.TrimSpace(headers.Get("Authorization")), " ")
+	return !strings.EqualFold(scheme, "basic")
 }
 
 // The OData client surfaces the upstream status only in its error text.

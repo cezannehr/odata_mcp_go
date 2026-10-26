@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -16,6 +17,10 @@ import (
 const ProtectedResourcePrefix = "/.well-known/oauth-protected-resource"
 
 var protectedResourcePaths = []string{"/mcp", "/sse"}
+
+func isProtectedResource(path string) bool {
+	return slices.Contains(protectedResourcePaths, path)
+}
 
 func isProtectedResourceMetadata(path string) bool {
 	return strings.HasPrefix(path, ProtectedResourcePrefix+"/")
@@ -44,9 +49,17 @@ func protectedResourceChallenge(r *http.Request) string {
 	return fmt.Sprintf(`Bearer resource_metadata="%s%s%s"`, origin(r), ProtectedResourcePrefix, r.URL.Path)
 }
 
+// RFC 6750 names the error only when a token was sent, which is how a client
+// tells a refused token from a missing one.
+func invalidTokenChallenge(r *http.Request) string {
+	return fmt.Sprintf(`Bearer error="invalid_token", resource_metadata="%s%s%s"`, origin(r), ProtectedResourcePrefix, r.URL.Path)
+}
+
 func ProtectedResourceHandler(authorizationServer string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		// Public and credential-free, so any browser-based client may read it.
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if err := json.NewEncoder(w).Encode(map[string]any{
 			"resource":                 origin(r) + strings.TrimPrefix(r.URL.Path, ProtectedResourcePrefix),
 			"authorization_servers":    []string{authorizationServer},

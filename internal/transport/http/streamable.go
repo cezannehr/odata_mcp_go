@@ -131,7 +131,8 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 	response, err := t.handler(ctx, &msg)
 	var rejected *transport.CredentialRejectedError
 	if errors.As(err, &rejected) {
-		w.Header().Set("WWW-Authenticate", protectedResourceChallenge(r))
+		record.Add(slog.String("error", rejected.Error()))
+		w.Header().Set("WWW-Authenticate", invalidTokenChallenge(r))
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
